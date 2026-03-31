@@ -76,6 +76,7 @@ class NetmikoConnection:
 
         if self.credentials.key_file:
             params["key_file"] = self.credentials.key_file
+            params["use_keys"] = True
 
         if self.credentials.use_ssh_agent:
             params["use_keys"] = True
@@ -87,6 +88,9 @@ class NetmikoConnection:
         if "timeout" in self.device_config:
             params["timeout"] = self.device_config["timeout"]
             params["conn_timeout"] = self.device_config["timeout"]
+
+        if "disabled_algorithms" in self.device_config:
+            params["disabled_algorithms"] = self.device_config["disabled_algorithms"]
 
         logger.info("Connecting to %s (%s)", self.device_name, params["host"])
         self.net_connect = ConnectHandler(**params)
