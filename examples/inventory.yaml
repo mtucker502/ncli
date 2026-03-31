@@ -1,0 +1,47 @@
+# NCLI Sample Inventory
+# Copy this file and customize for your environment.
+
+defaults:
+  username: admin
+  timeout: 60
+  port: 22
+
+groups:
+  firewalls:
+    - asa-01
+    - fw-01
+  dc1-switches:
+    - sw-dc1-01
+
+devices:
+  asa-01:
+    host: 10.0.3.1
+    device_type: cisco_asa
+    auth:
+      type: password
+      password: "cisco123"
+      enable_secret: "en4bl3"
+    tags:
+      - role:firewall
+      - site:hq
+
+  sw-dc1-01:
+    host: 10.0.1.1
+    device_type: arista_eos
+    auth:
+      type: ssh_key
+      key_file: ~/.ssh/id_ed25519
+    tags:
+      - datacenter:dc1
+      - role:switch
+
+  fw-01:
+    host: 10.0.3.2
+    device_type: cisco_asa
+    auth:
+      type: password
+      password: "fw_pass!"
+      enable_secret: "fw_en4bl3"
+    tags:
+      - role:firewall
+      - site:branch
