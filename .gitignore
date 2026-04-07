@@ -31,3 +31,6 @@ htmlcov/
 
 # Ruff
 .ruff_cache/
+
+# Local inventory
+inventory.yaml
