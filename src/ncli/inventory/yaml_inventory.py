@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import yaml
@@ -32,6 +33,7 @@ class YamlInventory(InventoryPlugin):
         self._raw["devices"] = devices
         with open(self._path, "w") as f:
             yaml.dump(self._raw, f, default_flow_style=False, sort_keys=False)
+        os.chmod(self._path, 0o600)
 
     def get_groups(self) -> dict[str, list[str]]:
         return self._raw.get("groups", {})

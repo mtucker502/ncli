@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import stat
 from pathlib import Path
 
 import pytest
@@ -73,6 +74,14 @@ class TestYamlInventorySave:
         raw = yaml.safe_load(tmp_inventory_path.read_text())
         assert "groups" in raw
         assert "datacenter" in raw["groups"]
+
+    def test_save_restricts_permissions(self, tmp_inventory_path: Path) -> None:
+        inv = YamlInventory(tmp_inventory_path)
+        devices = inv.load()
+        inv.save(devices)
+
+        mode = stat.S_IMODE(tmp_inventory_path.stat().st_mode)
+        assert mode == 0o600
 
 
 class TestYamlInventoryValidation:

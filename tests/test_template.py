@@ -93,6 +93,38 @@ class TestRenderConfig:
         assert "interface Loopback0" in result
         assert "ip address 1.1.1.1 255.255.255.255" in result
 
+    def test_render_config_rejects_bad_template_extension(
+        self, tmp_path: Path, variables_file: Path
+    ) -> None:
+        bad = tmp_path / "evil.py"
+        bad.write_text("hostname X\n")
+        with pytest.raises(ValueError, match="unsupported extension"):
+            render_config(bad, variables_file)
+
+    def test_render_config_rejects_bad_vars_extension(
+        self, template_file: Path, tmp_path: Path
+    ) -> None:
+        bad = tmp_path / "vars.txt"
+        bad.write_text("hostname: R1\n")
+        with pytest.raises(ValueError, match="unsupported extension"):
+            render_config(template_file, bad)
+
+    def test_render_config_rejects_missing_file(
+        self, tmp_path: Path, variables_file: Path
+    ) -> None:
+        with pytest.raises(FileNotFoundError):
+            render_config(tmp_path / "missing.j2", variables_file)
+
+
+class TestSandboxing:
+    def test_blocks_access_to_dunder_attributes(self, tmp_path: Path) -> None:
+        from jinja2.exceptions import SecurityError
+
+        tmpl = tmp_path / "evil.j2"
+        tmpl.write_text("{{ obj.__class__.__mro__ }}\n")
+        with pytest.raises(SecurityError):
+            render_template(tmpl, {"obj": object()})
+
     def test_render_config_with_loop(self, tmp_path: Path) -> None:
         tmpl = tmp_path / "loop.j2"
         tmpl.write_text(

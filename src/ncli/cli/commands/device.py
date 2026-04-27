@@ -39,7 +39,17 @@ def device_info(ctx: CliContext, name: str) -> None:
 @click.option("--host", required=True, help="Device hostname or IP")
 @click.option("--device-type", required=True, help="Netmiko device type")
 @click.option("--username", default=None, help="Username")
-@click.option("--password", default=None, help="Password")
+@click.option(
+    "--password",
+    default=None,
+    hidden=True,
+    help="Password (prefer --prompt-password for interactive entry).",
+)
+@click.option(
+    "--prompt-password",
+    is_flag=True,
+    help="Prompt interactively for password.",
+)
 @click.option("--port", type=int, default=None, help="SSH port")
 @pass_context
 def device_add(
@@ -49,12 +59,16 @@ def device_add(
     device_type: str,
     username: str | None,
     password: str | None,
+    prompt_password: bool,
     port: int | None,
 ) -> None:
     """Add a device to the inventory."""
     if ctx.inventory is None:
         click.echo("Error: no inventory loaded", err=True)
         sys.exit(1)
+
+    if prompt_password and not password:
+        password = click.prompt("Password", hide_input=True)
 
     config: dict = {"host": host, "device_type": device_type}
     if username:

@@ -139,6 +139,21 @@ class TestDeviceAdd:
         ])
         assert result.exit_code != 0
 
+    def test_device_add_prompt_password(self, runner: CliRunner, inv_file: Path) -> None:
+        result = runner.invoke(
+            cli,
+            [
+                "-f", str(inv_file), "device", "add", "promptdev",
+                "--host", "10.10.10.20",
+                "--device-type", "cisco_ios",
+                "--prompt-password",
+            ],
+            input="s3cret\n",
+        )
+        assert result.exit_code == 0
+        raw = yaml.safe_load(inv_file.read_text())
+        assert raw["devices"]["promptdev"]["auth"]["password"] == "s3cret"
+
 
 class TestDeviceRemove:
     def test_device_remove_with_force(self, runner: CliRunner, inv_file: Path) -> None:
