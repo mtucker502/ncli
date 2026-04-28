@@ -10,7 +10,9 @@ from ncli.device.connection import NetmikoConnection
 logger = logging.getLogger(__name__)
 
 # Platforms whose Netmiko drivers expose a commit() method.
-_COMMIT_PLATFORMS = frozenset({"junos", "arista_eos", "cisco_xr"})
+_COMMIT_PLATFORMS = frozenset(
+    {"junos", "juniper", "juniper_junos", "arista_eos", "cisco_xr", "cisco_iosxr"}
+)
 
 
 def config_push(

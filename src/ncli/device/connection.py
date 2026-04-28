@@ -23,6 +23,8 @@ _ERROR_PATTERNS = (
     "Error:",
 )
 
+_JUNOS_PLATFORMS = frozenset({"junos", "juniper", "juniper_junos"})
+
 
 class NetmikoConnection:
     """Wrapper around a Netmiko connection with context-manager support.
@@ -197,13 +199,23 @@ class NetmikoConnection:
         Parameters
         ----------
         section:
-            Optional IOS-style section filter (e.g. ``"interface"``).
+            Optional section filter. Cisco-style: ``"interface"`` becomes
+            ``| section interface``. Junos-style: ``"system services"``
+            becomes ``show configuration system services``.
         """
         conn = self._ensure_connected()
 
-        cmd = "show running-config"
-        if section:
-            cmd = f"{cmd} | section {section}"
+        device_type = self.device_config.get("device_type", "")
+
+        if device_type in _JUNOS_PLATFORMS:
+            base = "show configuration"
+            if section:
+                base = f"{base} {section}"
+            cmd = f"{base} | display set | no-more"
+        else:
+            cmd = "show running-config"
+            if section:
+                cmd = f"{cmd} | section {section}"
 
         output: str = conn.send_command(cmd)
         return output

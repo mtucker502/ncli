@@ -288,3 +288,37 @@ class TestNetmikoConnectionSendConfig:
 
         mock_conn.send_command.assert_called_once_with("show running-config | section interface")
         assert result == "interface config"
+
+    @patch("ncli.device.connection.ConnectHandler")
+    def test_get_config_juniper_junos(
+        self, mock_handler: MagicMock, credentials: Credentials
+    ) -> None:
+        mock_conn = MagicMock()
+        mock_conn.send_command.return_value = "set system host-name r1"
+        mock_handler.return_value = mock_conn
+        junos_cfg = {"device_type": "juniper_junos", "host": "10.0.0.1", "port": 22, "timeout": 30}
+
+        with NetmikoConnection("dev1", junos_cfg, credentials) as conn:
+            result = conn.get_config()
+
+        mock_conn.send_command.assert_called_once_with(
+            "show configuration | display set | no-more"
+        )
+        assert result == "set system host-name r1"
+
+    @patch("ncli.device.connection.ConnectHandler")
+    def test_get_config_juniper_junos_with_section(
+        self, mock_handler: MagicMock, credentials: Credentials
+    ) -> None:
+        mock_conn = MagicMock()
+        mock_conn.send_command.return_value = "set system services ssh"
+        mock_handler.return_value = mock_conn
+        junos_cfg = {"device_type": "juniper_junos", "host": "10.0.0.1", "port": 22, "timeout": 30}
+
+        with NetmikoConnection("dev1", junos_cfg, credentials) as conn:
+            result = conn.get_config(section="system services")
+
+        mock_conn.send_command.assert_called_once_with(
+            "show configuration system services | display set | no-more"
+        )
+        assert result == "set system services ssh"

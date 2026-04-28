@@ -64,6 +64,18 @@ class TestConfigPush:
         config_push(mock_connection, lines)
         mock_connection._ensure_connected.assert_not_called()
 
+    def test_push_commits_on_juniper_junos(self, mock_connection: MagicMock) -> None:
+        mock_connection.device_config = {"device_type": "juniper_junos", "host": "10.0.0.1"}
+        mock_connection.send_config.return_value = "config applied"
+        mock_inner = MagicMock()
+        mock_inner.commit.return_value = "committed"
+        mock_connection._ensure_connected.return_value = mock_inner
+
+        lines = ["set system host-name R1"]
+        result = config_push(mock_connection, lines)
+        mock_inner.commit.assert_called_once_with()
+        assert "committed" in result
+
 
 class TestConfigDiff:
     def test_diff_no_candidate_returns_empty(self, mock_connection: MagicMock) -> None:
