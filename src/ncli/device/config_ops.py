@@ -13,6 +13,7 @@ logger = logging.getLogger(__name__)
 _COMMIT_PLATFORMS = frozenset(
     {"junos", "juniper", "juniper_junos", "arista_eos", "cisco_xr", "cisco_iosxr"}
 )
+_JUNOS_PLATFORMS = frozenset({"junos", "juniper", "juniper_junos"})
 
 
 def config_push(
@@ -50,7 +51,28 @@ def config_push(
     output = connection.send_config(config_lines)
 
     device_type: str = connection.device_config.get("device_type", "")
-    if device_type in _COMMIT_PLATFORMS:
+    if device_type in _JUNOS_PLATFORMS and comment:
+        # Netmiko's juniper commit(comment=) and send_command both use
+        # expect/echo regex paths that misbehave when # or > appear in the
+        # comment text (the [>#] alternative matches mid-buffer). Drop to
+        # write_channel + read_until_pattern for a marker-based wait.
+        if '"' in comment:
+            raise ValueError("Junos commit comment cannot contain double quote")
+        conn = connection._ensure_connected()  # noqa: SLF001
+        logger.info("Committing configuration on %s", connection.device_name)
+        conn.config_mode()
+        cmd = f'commit comment "{comment}"'
+        conn.write_channel(cmd + "\n")
+        commit_output = conn.read_until_pattern(
+            pattern=r"commit complete|error: ",
+            read_timeout=120,
+        )
+        if "commit complete" not in commit_output:
+            raise RuntimeError(
+                f"Junos commit failed on {connection.device_name}:\n{commit_output}"
+            )
+        output += "\n" + commit_output
+    elif device_type in _COMMIT_PLATFORMS:
         conn = connection._ensure_connected()  # noqa: SLF001
         logger.info("Committing configuration on %s", connection.device_name)
         commit_kwargs: dict = {}

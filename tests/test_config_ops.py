@@ -76,6 +76,48 @@ class TestConfigPush:
         mock_inner.commit.assert_called_once_with()
         assert "committed" in result
 
+    def test_push_junos_with_comment_bypasses_netmiko_commit(
+        self, mock_connection: MagicMock
+    ) -> None:
+        # Netmiko's juniper commit(comment=) and send_command both use regex
+        # paths that misfire on # or > in the comment. Drop to write_channel +
+        # read_until_pattern for marker-based completion.
+        mock_connection.device_config = {"device_type": "juniper_junos", "host": "10.0.0.1"}
+        mock_connection.send_config.return_value = "config applied"
+        mock_inner = MagicMock()
+        mock_inner.read_until_pattern.return_value = "commit complete\n[edit]\nroot@r1# "
+        mock_connection._ensure_connected.return_value = mock_inner
+
+        result = config_push(
+            mock_connection, ["set foo"], comment="fixes #1 >see ref"
+        )
+
+        mock_inner.commit.assert_not_called()
+        mock_inner.send_command.assert_not_called()
+        mock_inner.config_mode.assert_called_once()
+        sent_cmd = mock_inner.write_channel.call_args.args[0]
+        assert sent_cmd == 'commit comment "fixes #1 >see ref"\n'
+        assert "commit complete" in result
+
+    def test_push_junos_with_comment_raises_on_failure(self, mock_connection: MagicMock) -> None:
+        mock_connection.device_config = {"device_type": "juniper_junos", "host": "10.0.0.1"}
+        mock_connection.send_config.return_value = "ok"
+        mock_inner = MagicMock()
+        mock_inner.read_until_pattern.return_value = "error: configuration check-out failed"
+        mock_connection._ensure_connected.return_value = mock_inner
+
+        with pytest.raises(RuntimeError, match="commit failed"):
+            config_push(mock_connection, ["set foo"], comment="hello")
+
+    def test_push_junos_rejects_double_quote_in_comment(
+        self, mock_connection: MagicMock
+    ) -> None:
+        mock_connection.device_config = {"device_type": "juniper_junos", "host": "10.0.0.1"}
+        mock_connection.send_config.return_value = "ok"
+
+        with pytest.raises(ValueError, match="double quote"):
+            config_push(mock_connection, ["set foo"], comment='bad "quote" here')
+
 
 class TestConfigDiff:
     def test_diff_no_candidate_returns_empty(self, mock_connection: MagicMock) -> None:
