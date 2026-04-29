@@ -135,3 +135,25 @@ def session_inventory(inventory_path: Path, clab_session: dict[str, DeviceEndpoi
 @pytest.fixture()
 def isolated_inventory(inventory_path: Path, isolated_device: DeviceEndpoint) -> Path:
     return write_inventory(inventory_path, {isolated_device.name: isolated_device})
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo) -> object:
+    outcome = yield
+    rep = outcome.get_result()
+    if rep.when != "call" or rep.passed:
+        return None
+    if "clab" not in {m.name for m in item.iter_markers()}:
+        return None
+    artifacts_root = Path(item.config.rootpath) / "tests" / "e2e" / "_artifacts" / item.name
+    try:
+        artifacts_root.mkdir(parents=True, exist_ok=True)
+        (artifacts_root / "stderr.txt").write_text(str(rep.longrepr))
+        executor = item.funcargs.get("executor")
+        if executor is not None:
+            (artifacts_root / "executor.txt").write_text(type(executor).__name__)
+    except Exception as exc:  # noqa: BLE001
+        # Never let artifact collection fail a test.
+        artifacts_root.mkdir(parents=True, exist_ok=True)
+        (artifacts_root / "artifact-error.txt").write_text(repr(exc))
+    return None

@@ -95,6 +95,10 @@ class LocalExecutor(Executor):
         if not wait_ssh_open(host, 22, deadline_s=deadline):
             raise RuntimeError(f"SSH on {node_name} ({host}:22) did not come up within {deadline}s")
 
+        from tests.e2e.harness.connect import smoke_test_connect
+
+        smoke_test_connect(host, 22, vendor.username, vendor.password, vendor.netmiko_type)
+
         return DeviceEndpoint(
             name=node_name,
             host=host,

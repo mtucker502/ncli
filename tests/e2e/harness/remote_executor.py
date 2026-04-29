@@ -88,6 +88,10 @@ class RemoteExecutor(Executor):
         if not wait_ssh_open("127.0.0.1", local_port, deadline_s=deadline):
             raise RuntimeError(f"tunneled SSH on {node_name} did not come up within {deadline}s")
 
+        from tests.e2e.harness.connect import smoke_test_connect
+
+        smoke_test_connect("127.0.0.1", local_port, vendor.username, vendor.password, vendor.netmiko_type)
+
         return DeviceEndpoint(
             name=node_name,
             host="127.0.0.1",
