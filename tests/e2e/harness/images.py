@@ -24,3 +24,9 @@ class ImageProbe:
         def run(argv: list[str]) -> int:
             return subprocess.run(argv, capture_output=True).returncode
         return cls(_runner=run)
+
+    @classmethod
+    def over_ssh(cls, master) -> ImageProbe:  # type: ignore[no-untyped-def]
+        def run(argv: list[str]) -> int:
+            return master.run(argv).returncode
+        return cls(_runner=run)
