@@ -59,18 +59,26 @@ class LocalExecutor(Executor):
             ["containerlab", "inspect", "-t", str(topo_path), "--format", "json"],
             capture_output=True,
             text=True,
-            check=True,
         )
+        if inspect.returncode != 0:
+            raise RuntimeError(
+                f"clab inspect failed:\nstdout:\n{inspect.stdout}\nstderr:\n{inspect.stderr}"
+            )
         inspect_doc = json.loads(inspect.stdout)
         return Lab(name=topology.name, topology_yaml_path=str(topo_path), inspect_raw=inspect_doc)
 
     def destroy(self, lab: Lab) -> None:
         logger.info("Destroying clab topology %s", lab.name)
-        subprocess.run(
+        proc = subprocess.run(
             ["containerlab", "destroy", "-t", lab.topology_yaml_path, "--cleanup"],
             capture_output=True,
             text=True,
         )
+        if proc.returncode != 0:
+            logger.warning(
+                "clab destroy exited %d for %s: %s",
+                proc.returncode, lab.name, proc.stderr.strip(),
+            )
 
     def resolve(self, lab: Lab, node_name: str) -> DeviceEndpoint:
         node_doc = _find_node(lab.inspect_raw, lab.name, node_name)
