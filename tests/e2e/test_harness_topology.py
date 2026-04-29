@@ -79,8 +79,7 @@ class TestTopologyEmission:
         topo = isolated("crpd")
         doc = yaml.safe_load(topo.to_clab_yaml())
         node_cfg = next(iter(doc["topology"]["nodes"].values()))
-        # crpd has a startup_config bind path
-        assert "startup-config" in node_cfg or "binds" in node_cfg
+        assert "startup-config" in node_cfg
 
     def test_required_kinds(self) -> None:
         topo = session_three_vendor()
@@ -92,6 +91,35 @@ class TestTopologyEmission:
         assert smaller.required_kinds() == {"crpd", "nokia_srlinux"}
         # original is unchanged
         assert topo.required_kinds() == {"crpd", "ceos", "nokia_srlinux"}
+
+    def test_to_clab_yaml_omits_startup_when_none(self) -> None:
+        from tests.e2e.harness.topology import Node, Topology
+        from tests.e2e.harness.vendor import Vendor
+
+        custom = Vendor(
+            kind="custom",
+            image="custom:latest",
+            netmiko_type="cisco_ios",
+            username="u",
+            password="p",
+            startup_config=None,
+        )
+        topo = Topology(nodes=[Node(name="x", vendor=custom)])
+        doc = yaml.safe_load(topo.to_clab_yaml())
+        node_cfg = next(iter(doc["topology"]["nodes"].values()))
+        assert "startup-config" not in node_cfg
+
+    def test_without_kinds_empty_list_returns_all_nodes(self) -> None:
+        topo = session_three_vendor()
+        same = topo.without_kinds([])
+        assert same.required_kinds() == topo.required_kinds()
+        assert len(same.nodes) == 3
+
+    def test_without_kinds_all_returns_empty_topology(self) -> None:
+        topo = session_three_vendor()
+        empty = topo.without_kinds(["crpd", "ceos", "nokia_srlinux"])
+        assert empty.nodes == []
+        assert empty.required_kinds() == set()
 
 
 class TestStartupConfigsPresent:
