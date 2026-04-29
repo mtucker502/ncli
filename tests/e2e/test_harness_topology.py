@@ -151,3 +151,36 @@ class TestImageProbe:
             mock_run.return_value.returncode = 1
             probe = ImageProbe.local()
             assert probe.has_image("nonexistent:tag") is False
+
+
+import socket
+import threading
+
+from tests.e2e.harness.health import wait_ssh_open
+
+
+class TestHealthGate:
+    def test_returns_true_when_port_open(self) -> None:
+        srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        srv.bind(("127.0.0.1", 0))
+        srv.listen(1)
+        port = srv.getsockname()[1]
+
+        def accept_and_close() -> None:
+            try:
+                c, _ = srv.accept()
+                c.close()
+            except OSError:
+                pass
+
+        threading.Thread(target=accept_and_close, daemon=True).start()
+        assert wait_ssh_open("127.0.0.1", port, deadline_s=5) is True
+        srv.close()
+
+    def test_returns_false_when_port_unreachable(self) -> None:
+        # Pick a port nothing should be listening on.
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+        s.close()
+        assert wait_ssh_open("127.0.0.1", port, deadline_s=2, delays=(1,)) is False
