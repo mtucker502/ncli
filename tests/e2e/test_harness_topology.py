@@ -6,11 +6,16 @@ structures and YAML emission. Hence: no @pytest.mark.clab.
 
 from __future__ import annotations
 
+import socket
+import threading
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 import yaml
 
+from tests.e2e.harness.health import wait_ssh_open
+from tests.e2e.harness.images import ImageProbe
 from tests.e2e.harness.topology import Node, Topology
 from tests.e2e.harness.vendor import VENDORS, Vendor
 from tests.e2e.topologies import isolated, session_three_vendor
@@ -93,9 +98,6 @@ class TestTopologyEmission:
         assert topo.required_kinds() == {"crpd", "ceos", "nokia_srlinux"}
 
     def test_to_clab_yaml_omits_startup_when_none(self) -> None:
-        from tests.e2e.harness.topology import Node, Topology
-        from tests.e2e.harness.vendor import Vendor
-
         custom = Vendor(
             kind="custom",
             image="custom:latest",
@@ -130,11 +132,6 @@ class TestStartupConfigsPresent:
         assert (configs_dir / "srl.startup.cfg").is_file()
 
 
-from unittest.mock import patch
-
-from tests.e2e.harness.images import ImageProbe
-
-
 class TestImageProbe:
     def test_local_probe_present(self) -> None:
         with patch("tests.e2e.harness.images.subprocess.run") as mock_run:
@@ -151,12 +148,6 @@ class TestImageProbe:
             mock_run.return_value.returncode = 1
             probe = ImageProbe.local()
             assert probe.has_image("nonexistent:tag") is False
-
-
-import socket
-import threading
-
-from tests.e2e.harness.health import wait_ssh_open
 
 
 class TestHealthGate:
