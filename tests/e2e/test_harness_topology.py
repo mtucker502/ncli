@@ -128,3 +128,25 @@ class TestStartupConfigsPresent:
         assert (configs_dir / "crpd.startup.conf").is_file()
         assert (configs_dir / "ceos.startup.cfg").is_file()
         assert (configs_dir / "srl.startup.cfg").is_file()
+
+
+from unittest.mock import patch
+
+from tests.e2e.harness.images import ImageProbe
+
+
+class TestImageProbe:
+    def test_local_probe_present(self) -> None:
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            probe = ImageProbe.local()
+            assert probe.has_image("ceos:latest") is True
+            args = mock_run.call_args.args[0]
+            assert args[:3] == ["docker", "image", "inspect"]
+            assert "ceos:latest" in args
+
+    def test_local_probe_missing(self) -> None:
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 1
+            probe = ImageProbe.local()
+            assert probe.has_image("nonexistent:tag") is False
