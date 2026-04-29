@@ -38,3 +38,7 @@ inventory.yaml
 # Local agent instructions (untracked)
 CLAUDE.md
 .claude/
+
+# e2e scratch and artifact directories
+tests/e2e/_scratch/
+tests/e2e/_artifacts/
