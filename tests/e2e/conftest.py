@@ -7,8 +7,17 @@ suite must remain runnable without Docker / containerlab / SSH dependencies.
 from __future__ import annotations
 
 import os
+from pathlib import Path
+from typing import Iterator
 
 import pytest
+
+from tests.e2e.harness.endpoint import DeviceEndpoint
+from tests.e2e.harness.executor import Executor
+from tests.e2e.harness.inventory import write_inventory
+from tests.e2e.harness.local_executor import LocalExecutor
+from tests.e2e.harness.vendor import VENDORS
+from tests.e2e.topologies import isolated, session_three_vendor
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -36,18 +45,6 @@ def clab_host(request: pytest.FixtureRequest) -> str | None:
 def clab_strict() -> bool:
     """When NCLI_E2E_STRICT=1, missing-image skips become hard fails."""
     return os.environ.get("NCLI_E2E_STRICT") == "1"
-
-
-from pathlib import Path
-from typing import Iterator
-
-from tests.e2e.harness.endpoint import DeviceEndpoint
-from tests.e2e.harness.executor import Executor
-from tests.e2e.harness.inventory import write_inventory
-from tests.e2e.harness.local_executor import LocalExecutor
-from tests.e2e.harness.topology import Topology
-from tests.e2e.harness.vendor import VENDORS
-from tests.e2e.topologies import isolated, session_three_vendor
 
 
 def _build_executor(clab_host: str | None) -> Executor:
