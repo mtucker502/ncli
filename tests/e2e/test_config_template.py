@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import subprocess
-
 import pytest
 import yaml
+
+from tests.e2e.harness.env import run_ncli
 
 
 def _template_for(device_type: str) -> tuple[str, dict]:
@@ -25,7 +25,7 @@ def test_template_render_no_apply_prints(tmp_path, session_inventory, clab_sessi
     vars_path = tmp_path / "v.yaml"
     vars_path.write_text("banner: render-only\n")
 
-    proc = subprocess.run(
+    proc = run_ncli(
         ["ncli", "-f", str(session_inventory), "config", "template",
          "-t", str(tmpl), "-V", str(vars_path)],
         capture_output=True, text=True, timeout=30,
@@ -42,7 +42,7 @@ def test_template_apply_pushes(tmp_path, isolated_inventory, isolated_device) ->
     vars_path = tmp_path / "v.yaml"
     vars_path.write_text(yaml.safe_dump(vars_doc))
 
-    proc = subprocess.run(
+    proc = run_ncli(
         ["ncli", "-f", str(isolated_inventory), "config", "template",
          "-t", str(tmpl), "-V", str(vars_path),
          "--apply", "-r", isolated_device.name],
@@ -50,7 +50,7 @@ def test_template_apply_pushes(tmp_path, isolated_inventory, isolated_device) ->
     )
     assert proc.returncode == 0, proc.stderr
 
-    show = subprocess.run(
+    show = run_ncli(
         ["ncli", "-f", str(isolated_inventory), "config", "show", isolated_device.name],
         capture_output=True, text=True, timeout=120,
     )

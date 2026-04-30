@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import logging
 import shlex
-import subprocess
 import uuid
 from pathlib import PurePosixPath
 
@@ -13,7 +12,7 @@ from tests.e2e.harness.endpoint import DeviceEndpoint, Lab
 from tests.e2e.harness.executor import Executor
 from tests.e2e.harness.health import wait_ssh_open
 from tests.e2e.harness.images import ImageProbe
-from tests.e2e.harness.local_executor import _extract_ipv4, _find_node, _HEALTH_DEADLINE_S
+from tests.e2e.harness.inspect import HEALTH_DEADLINE_S, extract_ipv4, find_node
 from tests.e2e.harness.ssh import SshMaster, alloc_local_port
 from tests.e2e.harness.topology import Topology
 from tests.e2e.harness.vendor import VENDORS
@@ -45,10 +44,8 @@ class RemoteExecutor(Executor):
         remote_dir = PurePosixPath(f"/tmp/{topology.name}-{uuid.uuid4().hex[:6]}")
         remote_yaml = remote_dir / f"{topology.name}.clab.yaml"
         self._master.run(["mkdir", "-p", str(remote_dir)])
-        # Pipe YAML in via stdin.
         write_cmd = f"cat > {shlex.quote(str(remote_yaml))}"
-        argv = [*self._master._base_args(), "--", "sh", "-c", write_cmd]  # noqa: SLF001
-        proc = subprocess.run(argv, input=topology.to_clab_yaml(), capture_output=True, text=True)
+        proc = self._master.run_with_stdin(["sh", "-c", write_cmd], topology.to_clab_yaml())
         if proc.returncode != 0:
             raise RuntimeError(f"writing remote topology failed: {proc.stderr}")
 
@@ -72,8 +69,8 @@ class RemoteExecutor(Executor):
             )
 
     def resolve(self, lab: Lab, node_name: str) -> DeviceEndpoint:
-        node_doc = _find_node(lab.inspect_raw, lab.name, node_name)
-        remote_ip = _extract_ipv4(node_doc)
+        node_doc = find_node(lab.inspect_raw, lab.name, node_name)
+        remote_ip = extract_ipv4(node_doc)
 
         local_port = alloc_local_port()
         self._master.forward(local_port, remote_ip, 22)
@@ -84,7 +81,7 @@ class RemoteExecutor(Executor):
         if vendor is None:
             raise RuntimeError(f"Cannot map clab kind {kind!r} to Vendor")
 
-        deadline = _HEALTH_DEADLINE_S.get(kind, 60)
+        deadline = HEALTH_DEADLINE_S.get(kind, 60)
         if not wait_ssh_open("127.0.0.1", local_port, deadline_s=deadline):
             raise RuntimeError(f"tunneled SSH on {node_name} did not come up within {deadline}s")
 
@@ -100,6 +97,10 @@ class RemoteExecutor(Executor):
             password=vendor.password,
             device_type=vendor.netmiko_type,
         )
+
+    def container_logs(self, container_name: str, tail: int = 200) -> str:
+        proc = self._master.run(["docker", "logs", "--tail", str(tail), container_name])
+        return proc.stdout + "\n--- stderr ---\n" + proc.stderr
 
     def close(self) -> None:
         self._master.close()

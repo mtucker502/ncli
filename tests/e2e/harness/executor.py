@@ -41,5 +41,9 @@ class Executor(ABC):
         """Resolve a node name to an SSH-reachable DeviceEndpoint."""
 
     @abstractmethod
+    def container_logs(self, container_name: str, tail: int = 200) -> str:
+        """Best-effort `docker logs --tail <n>` against the executor host."""
+
+    @abstractmethod
     def close(self) -> None:
         """Tear down per-executor resources (SSH masters, tunnels). Idempotent."""

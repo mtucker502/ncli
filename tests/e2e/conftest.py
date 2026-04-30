@@ -12,20 +12,18 @@ from typing import Iterator
 
 import pytest
 
-from tests.e2e.harness.endpoint import DeviceEndpoint
+from tests.e2e.harness.artifacts import dump_failure
+from tests.e2e.harness.endpoint import DeviceEndpoint, Lab
 from tests.e2e.harness.executor import Executor
 from tests.e2e.harness.inventory import write_inventory
 from tests.e2e.harness.local_executor import LocalExecutor
 from tests.e2e.harness.vendor import VENDORS
 from tests.e2e.topologies import isolated, session_three_vendor
 
-
-def pytest_addoption(parser: pytest.Parser) -> None:
-    parser.addoption(
-        "--clab-host",
-        default=None,
-        help="Remote SSH host running containerlab; unset = local executor.",
-    )
+# Active (lab, executor) pairs — populated by clab_session / isolated_device
+# fixtures, drained on teardown. The pytest_runtest_makereport hook iterates
+# this registry on failure to capture per-container diagnostics.
+_ACTIVE_LABS: list[tuple[Lab, Executor]] = []
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -92,10 +90,15 @@ def clab_session(executor: Executor, clab_strict: bool) -> Iterator[dict[str, De
         topology = topology.without_kinds([k for k in topology.required_kinds() if k not in available])
 
     lab = executor.deploy(topology)
+    _ACTIVE_LABS.append((lab, executor))
     try:
         endpoints = {n.name: executor.resolve(lab, n.name) for n in topology.nodes}
         yield endpoints
     finally:
+        try:
+            _ACTIVE_LABS.remove((lab, executor))
+        except ValueError:
+            pass
         executor.destroy(lab)
 
 
@@ -114,10 +117,15 @@ def isolated_device(
 
     topology = isolated(vendor_key)
     lab = executor.deploy(topology)
+    _ACTIVE_LABS.append((lab, executor))
     try:
         endpoint = executor.resolve(lab, topology.nodes[0].name)
         yield endpoint
     finally:
+        try:
+            _ACTIVE_LABS.remove((lab, executor))
+        except ValueError:
+            pass
         executor.destroy(lab)
 
 
@@ -152,6 +160,8 @@ def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo) -> objec
         executor = item.funcargs.get("executor")
         if executor is not None:
             (artifacts_root / "executor.txt").write_text(type(executor).__name__)
+        for lab, ex in list(_ACTIVE_LABS):
+            dump_failure(ex, lab, artifacts_root / lab.name)
     except Exception as exc:  # noqa: BLE001
         # Never let artifact collection fail a test.
         artifacts_root.mkdir(parents=True, exist_ok=True)

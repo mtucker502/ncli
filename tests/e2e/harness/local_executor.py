@@ -13,16 +13,10 @@ from tests.e2e.harness.endpoint import DeviceEndpoint, Lab
 from tests.e2e.harness.executor import Executor
 from tests.e2e.harness.health import wait_ssh_open
 from tests.e2e.harness.images import ImageProbe
+from tests.e2e.harness.inspect import HEALTH_DEADLINE_S, extract_ipv4, find_node
 from tests.e2e.harness.topology import Topology
 
 logger = logging.getLogger(__name__)
-
-# Per-vendor SSH-up budget; cEOS notoriously takes the longest.
-_HEALTH_DEADLINE_S = {
-    "crpd": 60,
-    "nokia_srlinux": 60,
-    "ceos": 180,
-}
 
 
 class LocalExecutor(Executor):
@@ -81,8 +75,8 @@ class LocalExecutor(Executor):
             )
 
     def resolve(self, lab: Lab, node_name: str) -> DeviceEndpoint:
-        node_doc = _find_node(lab.inspect_raw, lab.name, node_name)
-        host = _extract_ipv4(node_doc)
+        node_doc = find_node(lab.inspect_raw, lab.name, node_name)
+        host = extract_ipv4(node_doc)
         from tests.e2e.harness.vendor import VENDORS
 
         # Match node back to its Vendor by clab kind.
@@ -91,7 +85,7 @@ class LocalExecutor(Executor):
         if vendor is None:
             raise RuntimeError(f"Cannot map clab kind {kind!r} to a Vendor")
 
-        deadline = _HEALTH_DEADLINE_S.get(kind, 60)
+        deadline = HEALTH_DEADLINE_S.get(kind, 60)
         if not wait_ssh_open(host, 22, deadline_s=deadline):
             raise RuntimeError(f"SSH on {node_name} ({host}:22) did not come up within {deadline}s")
 
@@ -108,37 +102,14 @@ class LocalExecutor(Executor):
             device_type=vendor.netmiko_type,
         )
 
+    def container_logs(self, container_name: str, tail: int = 200) -> str:
+        proc = subprocess.run(
+            ["docker", "logs", "--tail", str(tail), container_name],
+            capture_output=True, text=True,
+        )
+        return proc.stdout + "\n--- stderr ---\n" + proc.stderr
+
     def close(self) -> None:
         for tmp in self._tmpdirs:
             tmp.cleanup()
         self._tmpdirs.clear()
-
-
-def _find_node(inspect_doc: dict, lab_name: str, node_name: str) -> dict:
-    """clab's inspect JSON shape: {"containers": [{name, lab_name, kind, ipv4_address, ...}]}.
-    Some clab versions nest under {lab_name: [...]}.
-    """
-    candidates: list[dict] = []
-    if isinstance(inspect_doc, dict):
-        if "containers" in inspect_doc:
-            candidates = inspect_doc["containers"]
-        elif lab_name in inspect_doc:
-            candidates = inspect_doc[lab_name]
-        else:
-            for v in inspect_doc.values():
-                if isinstance(v, list):
-                    candidates.extend(v)
-    for c in candidates:
-        # node names are prefixed with `clab-<lab>-` in clab; match suffix.
-        cname = c.get("name") or c.get("Name", "")
-        if cname.endswith(f"-{node_name}") or cname == node_name:
-            return c
-    raise KeyError(f"node {node_name!r} not found in inspect output for lab {lab_name!r}")
-
-
-def _extract_ipv4(node_doc: dict) -> str:
-    for k in ("ipv4_address", "ipv4Address", "IPv4Address"):
-        v = node_doc.get(k, "")
-        if isinstance(v, str) and v:
-            return v.split("/")[0]
-    raise RuntimeError(f"No IPv4 address in node doc: {node_doc!r}")

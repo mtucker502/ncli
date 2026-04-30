@@ -33,7 +33,12 @@ def main() -> int:
 
     topo = session_three_vendor()
     lab = ex.deploy(topo)
-    endpoints = {n.name: ex.resolve(lab, n.name) for n in topo.nodes}
+    try:
+        endpoints = {n.name: ex.resolve(lab, n.name) for n in topo.nodes}
+    except Exception:
+        # If any node fails to come up, don't leave the lab running.
+        ex.destroy(lab)
+        raise
 
     out_path = Path(args.out).resolve()
     out_path.parent.mkdir(parents=True, exist_ok=True)

@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
-import subprocess
-
 import pytest
+
+from tests.e2e.harness.env import run_ncli
 
 
 @pytest.mark.clab
 def test_config_show_returns_running_config(session_inventory, clab_session) -> None:
     for name in clab_session:
-        proc = subprocess.run(
+        proc = run_ncli(
             ["ncli", "-f", str(session_inventory), "config", "show", name],
             capture_output=True, text=True, timeout=120,
         )
@@ -29,7 +29,7 @@ def test_config_show_section_filters(session_inventory, clab_session, name_filte
     target = next((n for n in clab_session if name_filter in n), None)
     if target is None:
         pytest.skip(f"no {name_filter} device in session")
-    proc = subprocess.run(
+    proc = run_ncli(
         ["ncli", "-f", str(session_inventory), "config", "show", target, section],
         capture_output=True, text=True, timeout=120,
     )

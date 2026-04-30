@@ -45,7 +45,8 @@ class SshMaster:
     def control_path(self) -> str:
         return self._control_path
 
-    def _base_args(self) -> list[str]:
+    def base_args(self) -> list[str]:
+        """Return the ssh argv prefix shared by every invocation against this master."""
         args = [
             "ssh",
             "-o", f"ControlPath={self._control_path}",
@@ -60,35 +61,29 @@ class SshMaster:
 
     def open(self) -> None:
         # Force the master open by running a no-op
-        proc = subprocess.run([*self._base_args(), "true"], capture_output=True, text=True)
+        proc = subprocess.run([*self.base_args(), "true"], capture_output=True, text=True)
         if proc.returncode != 0:
             raise RuntimeError(f"ssh master open failed: {proc.stderr}")
 
     def run(self, remote_cmd: list[str]) -> subprocess.CompletedProcess[str]:
         """Run a command on the remote host. argv-style — no shell quoting needed."""
-        argv = [*self._base_args(), "--", *remote_cmd]
+        argv = [*self.base_args(), "--", *remote_cmd]
         return subprocess.run(argv, capture_output=True, text=True)
+
+    def run_with_stdin(self, remote_cmd: list[str], stdin: str) -> subprocess.CompletedProcess[str]:
+        """Run a remote command with `stdin` piped in. Used to stage files via `cat > path`."""
+        argv = [*self.base_args(), "--", *remote_cmd]
+        return subprocess.run(argv, input=stdin, capture_output=True, text=True)
 
     def forward(self, local_port: int, remote_host: str, remote_port: int) -> None:
         """Open an L-style tunnel via the existing master."""
-        argv = [
-            "ssh",
-            "-o", f"ControlPath={self._control_path}",
-            "-O", "forward",
-            "-L", f"{local_port}:{remote_host}:{remote_port}",
-            self.host if not self.user else f"{self.user}@{self.host}",
-        ]
+        argv = [*self.base_args(), "-O", "forward", "-L", f"{local_port}:{remote_host}:{remote_port}"]
         proc = subprocess.run(argv, capture_output=True, text=True)
         if proc.returncode != 0:
             raise RuntimeError(f"ssh forward failed ({local_port}->{remote_host}:{remote_port}): {proc.stderr}")
         self._tunnels.append((local_port, remote_host, remote_port))
 
     def close(self) -> None:
-        argv = [
-            "ssh",
-            "-o", f"ControlPath={self._control_path}",
-            "-O", "exit",
-            self.host if not self.user else f"{self.user}@{self.host}",
-        ]
+        argv = [*self.base_args(), "-O", "exit"]
         subprocess.run(argv, capture_output=True, text=True)
         self._socket_dir.cleanup()

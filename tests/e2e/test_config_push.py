@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import subprocess
-
 import pytest
+
+from tests.e2e.harness.env import run_ncli
 
 
 def _push_change_for(device_type: str) -> str:
@@ -22,7 +22,7 @@ def _push_change_for(device_type: str) -> str:
 def test_config_push_dry_run_no_device_touch(isolated_inventory, isolated_device, tmp_path) -> None:
     cfg = tmp_path / "candidate.conf"
     cfg.write_text(_push_change_for(isolated_device.device_type) + "\n")
-    proc = subprocess.run(
+    proc = run_ncli(
         ["ncli", "-f", str(isolated_inventory), "config", "push",
          isolated_device.name, str(cfg), "--dry-run"],
         capture_output=True, text=True, timeout=60,
@@ -38,14 +38,14 @@ def test_config_push_lands_then_visible_in_show(isolated_inventory, isolated_dev
     cfg = tmp_path / "candidate.conf"
     cfg.write_text(snippet + "\n")
 
-    push = subprocess.run(
+    push = run_ncli(
         ["ncli", "-f", str(isolated_inventory), "config", "push",
          isolated_device.name, str(cfg)],
         capture_output=True, text=True, timeout=180,
     )
     assert push.returncode == 0, push.stderr
 
-    show = subprocess.run(
+    show = run_ncli(
         ["ncli", "-f", str(isolated_inventory), "config", "show", isolated_device.name],
         capture_output=True, text=True, timeout=180,
     )
@@ -62,7 +62,7 @@ def test_junos_commit_comment_special_chars(isolated_inventory, isolated_device,
     cfg = tmp_path / "candidate.conf"
     cfg.write_text("set system login message regression-test\n")
 
-    proc = subprocess.run(
+    proc = run_ncli(
         ["ncli", "-f", str(isolated_inventory), "config", "push",
          isolated_device.name, str(cfg), "--comment", comment],
         capture_output=True, text=True, timeout=180,
@@ -78,7 +78,7 @@ def test_junos_commit_comment_with_double_quote_rejected(isolated_inventory, iso
     cfg = tmp_path / "candidate.conf"
     cfg.write_text("set system login message qtest\n")
 
-    proc = subprocess.run(
+    proc = run_ncli(
         ["ncli", "-f", str(isolated_inventory), "config", "push",
          isolated_device.name, str(cfg), "--comment", 'has "quote" inside'],
         capture_output=True, text=True, timeout=60,
@@ -94,7 +94,7 @@ def test_bad_config_returns_nonzero_no_partial_state(isolated_inventory, isolate
     cfg = tmp_path / "bad.conf"
     cfg.write_text("set system bogus-knob nonsense-value\n")
 
-    proc = subprocess.run(
+    proc = run_ncli(
         ["ncli", "-f", str(isolated_inventory), "config", "push",
          isolated_device.name, str(cfg)],
         capture_output=True, text=True, timeout=180,

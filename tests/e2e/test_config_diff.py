@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import subprocess
-
 import pytest
+
+from tests.e2e.harness.env import run_ncli
 
 
 @pytest.mark.clab
@@ -13,7 +13,7 @@ def test_diff_against_modified_candidate_shows_change(session_inventory, clab_se
     if target is None:
         pytest.skip("no crpd device in session")
 
-    show = subprocess.run(
+    show = run_ncli(
         ["ncli", "-f", str(session_inventory), "config", "show", target],
         capture_output=True, text=True, timeout=120,
     )
@@ -22,7 +22,7 @@ def test_diff_against_modified_candidate_shows_change(session_inventory, clab_se
     candidate = tmp_path / "candidate.conf"
     candidate.write_text(show.stdout + "\n# inserted line that should diff\n")
 
-    diff = subprocess.run(
+    diff = run_ncli(
         ["ncli", "-f", str(session_inventory), "config", "diff", target, "--candidate", str(candidate)],
         capture_output=True, text=True, timeout=120,
     )
@@ -36,7 +36,7 @@ def test_diff_identical_candidate_is_empty(session_inventory, clab_session, tmp_
     if target is None:
         pytest.skip("no crpd device in session")
 
-    show = subprocess.run(
+    show = run_ncli(
         ["ncli", "-f", str(session_inventory), "config", "show", target],
         capture_output=True, text=True, timeout=120,
     )
@@ -45,7 +45,7 @@ def test_diff_identical_candidate_is_empty(session_inventory, clab_session, tmp_
     candidate = tmp_path / "same.conf"
     candidate.write_text(show.stdout)
 
-    diff = subprocess.run(
+    diff = run_ncli(
         ["ncli", "-f", str(session_inventory), "config", "diff", target, "--candidate", str(candidate)],
         capture_output=True, text=True, timeout=120,
     )

@@ -10,6 +10,16 @@ import yaml
 from ncli.auth.base import Credentials
 
 
+def pytest_addoption(parser: pytest.Parser) -> None:
+    # Registered at rootdir so `--clab-host` is recognized regardless of which
+    # directory pytest is invoked from. Consumed by tests/e2e/conftest.py.
+    parser.addoption(
+        "--clab-host",
+        default=None,
+        help="Remote SSH host running containerlab; unset = local executor.",
+    )
+
+
 SAMPLE_INVENTORY = {
     "defaults": {
         "device_type": "cisco_asa",

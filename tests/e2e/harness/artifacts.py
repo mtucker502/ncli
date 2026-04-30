@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import json
 import shutil
-import subprocess
 from pathlib import Path
 
 from tests.e2e.harness.endpoint import Lab
+from tests.e2e.harness.executor import Executor
 
 
-def dump_failure(lab: Lab, dest: Path) -> None:
+def dump_failure(executor: Executor, lab: Lab, dest: Path) -> None:
     """Write clab inspect, docker logs, and topology YAML into `dest/`."""
     dest.mkdir(parents=True, exist_ok=True)
     (dest / "lab.json").write_text(json.dumps(lab.inspect_raw, indent=2))
@@ -28,8 +28,8 @@ def dump_failure(lab: Lab, dest: Path) -> None:
         cname = c.get("name") or c.get("Name", "")
         if not cname:
             continue
-        logs = subprocess.run(
-            ["docker", "logs", "--tail", "200", cname],
-            capture_output=True, text=True,
-        )
-        (dest / f"{cname}.log").write_text(logs.stdout + "\n--- stderr ---\n" + logs.stderr)
+        try:
+            logs = executor.container_logs(cname)
+        except Exception as exc:  # noqa: BLE001
+            logs = f"<container_logs failed: {exc!r}>"
+        (dest / f"{cname}.log").write_text(logs)

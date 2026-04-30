@@ -3,14 +3,15 @@
 from __future__ import annotations
 
 import json
-import subprocess
 
 import pytest
+
+from tests.e2e.harness.env import run_ncli
 
 
 @pytest.mark.clab
 def test_device_list_shows_session_devices(session_inventory, clab_session) -> None:
-    proc = subprocess.run(
+    proc = run_ncli(
         ["ncli", "-f", str(session_inventory), "device", "list"],
         capture_output=True, text=True, timeout=30,
     )
@@ -22,7 +23,7 @@ def test_device_list_shows_session_devices(session_inventory, clab_session) -> N
 @pytest.mark.clab
 def test_device_info_masks_password(session_inventory, clab_session) -> None:
     name = next(iter(clab_session))
-    proc = subprocess.run(
+    proc = run_ncli(
         ["ncli", "-j", "-f", str(session_inventory), "device", "info", name],
         capture_output=True, text=True, timeout=30,
     )
@@ -34,26 +35,26 @@ def test_device_info_masks_password(session_inventory, clab_session) -> None:
 @pytest.mark.clab
 def test_device_add_then_remove_round_trip(session_inventory, clab_session) -> None:
     extra = "scratch1"
-    add = subprocess.run(
+    add = run_ncli(
         ["ncli", "-f", str(session_inventory), "device", "add", extra,
          "--host", "10.255.255.1", "--device-type", "cisco_ios", "--username", "x", "--password", "y"],
         capture_output=True, text=True, timeout=30,
     )
     assert add.returncode == 0, add.stderr
 
-    listed = subprocess.run(
+    listed = run_ncli(
         ["ncli", "-f", str(session_inventory), "device", "list"],
         capture_output=True, text=True, timeout=30,
     )
     assert extra in listed.stdout
 
-    remove = subprocess.run(
+    remove = run_ncli(
         ["ncli", "-f", str(session_inventory), "device", "remove", extra, "--force"],
         capture_output=True, text=True, timeout=30,
     )
     assert remove.returncode == 0, remove.stderr
 
-    listed2 = subprocess.run(
+    listed2 = run_ncli(
         ["ncli", "-f", str(session_inventory), "device", "list"],
         capture_output=True, text=True, timeout=30,
     )
