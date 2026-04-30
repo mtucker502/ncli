@@ -49,6 +49,14 @@ class RemoteExecutor(Executor):
         if proc.returncode != 0:
             raise RuntimeError(f"writing remote topology failed: {proc.stderr}")
 
+        # Stage startup-configs alongside the YAML so clab resolves them by basename.
+        for basename, source in topology.startup_files():
+            remote_cfg = remote_dir / basename
+            cfg_cmd = f"cat > {shlex.quote(str(remote_cfg))}"
+            cfg_proc = self._master.run_with_stdin(["sh", "-c", cfg_cmd], source.read_text())
+            if cfg_proc.returncode != 0:
+                raise RuntimeError(f"writing remote startup-config {basename} failed: {cfg_proc.stderr}")
+
         r = self._master.run(["containerlab", "deploy", "-t", str(remote_yaml)])
         if r.returncode != 0:
             raise RuntimeError(f"remote clab deploy failed:\nstdout:\n{r.stdout}\nstderr:\n{r.stderr}")

@@ -10,6 +10,7 @@ from __future__ import annotations
 import copy
 import uuid
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import yaml
 
@@ -41,6 +42,20 @@ class Topology:
             name=self.name + "-sub",
         )
 
+    def startup_files(self) -> list[tuple[str, Path]]:
+        """Return (basename, source_path) for every node that declares a startup-config.
+
+        Executors stage these files into the same directory as the topology YAML
+        before invoking `containerlab deploy`, since the YAML references them
+        by basename only.
+        """
+        seen: dict[str, Path] = {}
+        for node in self.nodes:
+            if node.vendor.startup_config is None:
+                continue
+            seen[node.vendor.startup_config.name] = node.vendor.startup_config
+        return list(seen.items())
+
     def to_clab_yaml(self) -> str:
         nodes_doc: dict[str, dict] = {}
         for node in self.nodes:
@@ -49,7 +64,10 @@ class Topology:
                 "image": node.vendor.image,
             }
             if node.vendor.startup_config is not None:
-                cfg["startup-config"] = str(node.vendor.startup_config)
+                # Use basename so clab resolves it relative to the YAML's dir,
+                # which lets executors stage the file alongside the YAML on
+                # whichever host runs containerlab.
+                cfg["startup-config"] = node.vendor.startup_config.name
             nodes_doc[node.name] = cfg
 
         doc = {

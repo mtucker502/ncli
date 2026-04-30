@@ -39,6 +39,9 @@ class LocalExecutor(Executor):
         self._tmpdirs.append(tmp)
         topo_path = Path(tmp.name) / f"{topology.name}.clab.yaml"
         topo_path.write_text(topology.to_clab_yaml())
+        # Stage startup-configs alongside the YAML so clab resolves them by basename.
+        for basename, source in topology.startup_files():
+            shutil.copy2(source, Path(tmp.name) / basename)
 
         logger.info("Deploying clab topology %s", topology.name)
         proc = subprocess.run(
