@@ -12,10 +12,10 @@ e2e-clean-remote:
 	@ssh $(HOST) 'containerlab inspect --all --format json | python3 -c "import json,sys; [print(l[\"lab_name\"]) for l in json.load(sys.stdin).get(\"containers\",[]) if l.get(\"lab_name\",\"\").startswith(\"ncli-e2e-\")]" | sort -u | xargs -I{} containerlab destroy --name {} --cleanup'
 
 e2e:
-	pytest -m clab -v
+	uv run pytest -m clab -v
 
 e2e-up:
-	@python scripts/e2e_up.py $(if $(HOST),--host $(HOST))
+	@uv run python scripts/e2e_up.py $(if $(HOST),--host $(HOST))
 
 e2e-down:
 	@if [ ! -f tests/e2e/_scratch/lab.txt ]; then echo "no scratch lab found"; exit 0; fi
