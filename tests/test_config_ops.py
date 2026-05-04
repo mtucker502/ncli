@@ -140,3 +140,29 @@ class TestConfigDiff:
 
         result = config_diff(mock_connection, candidate=running)
         assert result == ""
+
+    def test_diff_candidate_with_extra_trailing_newline_is_empty(
+        self, mock_connection: MagicMock
+    ) -> None:
+        # Reproduces the scenario where `ncli config show > file` writes
+        # running-config plus an extra trailing newline (added by click.echo),
+        # then the file is fed back via `--candidate`. The candidate file has
+        # one more trailing '\n' than the internal running config.
+        running = "hostname R1\ninterface lo0\n"
+        mock_connection.get_config.return_value = running
+
+        candidate = running + "\n"
+
+        result = config_diff(mock_connection, candidate=candidate)
+        assert result == ""
+
+    def test_diff_candidate_missing_trailing_newline_is_empty(
+        self, mock_connection: MagicMock
+    ) -> None:
+        running = "hostname R1\ninterface lo0\n"
+        mock_connection.get_config.return_value = running
+
+        candidate = running.rstrip("\n")
+
+        result = config_diff(mock_connection, candidate=candidate)
+        assert result == ""

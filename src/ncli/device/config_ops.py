@@ -107,8 +107,11 @@ def config_diff(
     if candidate is None:
         return ""
 
-    running_lines = running.splitlines(keepends=True)
-    candidate_lines = candidate.splitlines(keepends=True)
+    # Normalize trailing newlines so that a candidate captured from
+    # `ncli config show` stdout (which gains an extra '\n' from click.echo)
+    # diffs cleanly against the internal running-config text.
+    running_lines = running.rstrip("\n").splitlines(keepends=True)
+    candidate_lines = candidate.rstrip("\n").splitlines(keepends=True)
 
     diff = difflib.unified_diff(
         running_lines,
