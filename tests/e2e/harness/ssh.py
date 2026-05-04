@@ -14,6 +14,7 @@ import subprocess
 import tempfile
 import uuid
 from dataclasses import dataclass, field
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -47,11 +48,17 @@ class SshMaster:
 
     def base_args(self) -> list[str]:
         """Return the ssh argv prefix shared by every invocation against this master."""
+        # ServerAliveInterval keeps the multiplexed master TCP connection from being
+        # pruned by an idle middle-box during long e2e runs (issue #5). Without it,
+        # all `-L` listeners die mid-suite and later netmiko connects get refused.
         args = [
             "ssh",
             "-o", f"ControlPath={self._control_path}",
             "-o", "ControlMaster=auto",
             "-o", "ControlPersist=60s",
+            "-o", "ServerAliveInterval=30",
+            "-o", "ServerAliveCountMax=3",
+            "-o", "ExitOnForwardFailure=yes",
             "-o", "StrictHostKeyChecking=accept-new",
             "-p", str(self.port),
         ]
@@ -82,6 +89,33 @@ class SshMaster:
         if proc.returncode != 0:
             raise RuntimeError(f"ssh forward failed ({local_port}->{remote_host}:{remote_port}): {proc.stderr}")
         self._tunnels.append((local_port, remote_host, remote_port))
+
+    def check(self) -> tuple[bool, str]:
+        """Probe whether the master is still alive via `ssh -O check`.
+
+        Returns (alive, combined_output). Used for diagnostics when a tunneled
+        connect fails — distinguishes a dead master from other failures.
+        """
+        argv = [*self.base_args(), "-O", "check"]
+        proc = subprocess.run(argv, capture_output=True, text=True)
+        return proc.returncode == 0, (proc.stdout + proc.stderr).strip()
+
+    def dump_state(self, dest: Path) -> None:
+        """Write master diagnostics into `dest/` for failure-artifact collection."""
+        dest.mkdir(parents=True, exist_ok=True)
+        alive, output = self.check()
+        lines = [
+            f"host: {self.host}",
+            f"user: {self.user}",
+            f"port: {self.port}",
+            f"control_path: {self._control_path}",
+            f"control_path_exists: {os.path.exists(self._control_path)}",
+            f"master_alive: {alive}",
+            f"check_output: {output}",
+            "tunnels:",
+            *(f"  {lp} -> {rh}:{rp}" for lp, rh, rp in self._tunnels),
+        ]
+        (dest / "ssh_master.txt").write_text("\n".join(lines) + "\n")
 
     def close(self) -> None:
         argv = [*self.base_args(), "-O", "exit"]

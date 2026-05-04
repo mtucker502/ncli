@@ -7,6 +7,7 @@ structures and YAML emission. Hence: no @pytest.mark.clab.
 from __future__ import annotations
 
 import socket
+import subprocess
 import threading
 from pathlib import Path
 from unittest.mock import patch
@@ -18,6 +19,7 @@ from tests.e2e.harness.connect import smoke_test_connect
 from tests.e2e.harness.health import wait_ssh_open
 from tests.e2e.harness.images import ImageProbe
 from tests.e2e.harness.inspect import HEALTH_DEADLINE_S, SMOKE_RETRIES
+from tests.e2e.harness.ssh import SshMaster
 from tests.e2e.harness.topology import Node, Topology
 from tests.e2e.harness.vendor import VENDORS, Vendor
 from tests.e2e.topologies import isolated, session_three_vendor
@@ -203,6 +205,63 @@ class TestSmokeConnect:
             with pytest.raises(RuntimeError, match="after 4 attempts"):
                 smoke_test_connect("h", 22, "u", "p", "ceos", retries=4, backoff_s=0)
             assert mock_conn.call_count == 4
+
+
+class TestSshMasterKeepalive:
+    """Issue #5: long remote runs lose port-forwards mid-suite without keepalive."""
+
+    def test_base_args_sets_server_alive_interval(self) -> None:
+        m = SshMaster(host="example.invalid")
+        args = m.base_args()
+        assert "ServerAliveInterval=30" in args
+        assert "ServerAliveCountMax=3" in args
+
+    def test_base_args_sets_exit_on_forward_failure(self) -> None:
+        m = SshMaster(host="example.invalid")
+        assert "ExitOnForwardFailure=yes" in m.base_args()
+
+    def test_base_args_keeps_control_persist(self) -> None:
+        m = SshMaster(host="example.invalid")
+        assert "ControlPersist=60s" in m.base_args()
+
+
+class TestSshMasterDiagnostics:
+    def test_check_returns_true_when_master_alive(self) -> None:
+        m = SshMaster(host="example.invalid")
+        with patch("tests.e2e.harness.ssh.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="Master running (pid=12345)\n", stderr="",
+            )
+            alive, output = m.check()
+            assert alive is True
+            assert "Master running" in output
+            argv = mock_run.call_args.args[0]
+            assert argv[-2:] == ["-O", "check"]
+
+    def test_check_returns_false_when_master_dead(self) -> None:
+        m = SshMaster(host="example.invalid")
+        with patch("tests.e2e.harness.ssh.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=255, stdout="", stderr="Control socket connect: No such file\n",
+            )
+            alive, output = m.check()
+            assert alive is False
+            assert "No such file" in output
+
+    def test_dump_state_writes_artifact(self, tmp_path: Path) -> None:
+        m = SshMaster(host="clab01", user="alice", port=2222)
+        with patch("tests.e2e.harness.ssh.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="Master running (pid=99)\n", stderr="",
+            )
+            m._tunnels.append((63327, "172.20.0.2", 22))
+            m.dump_state(tmp_path)
+        text = (tmp_path / "ssh_master.txt").read_text()
+        assert "host: clab01" in text
+        assert "user: alice" in text
+        assert "port: 2222" in text
+        assert "master_alive: True" in text
+        assert "63327 -> 172.20.0.2:22" in text
 
 
 class TestPerVendorBudgets:

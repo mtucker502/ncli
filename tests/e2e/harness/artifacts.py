@@ -33,3 +33,12 @@ def dump_failure(executor: Executor, lab: Lab, dest: Path) -> None:
         except Exception as exc:  # noqa: BLE001
             logs = f"<container_logs failed: {exc!r}>"
         (dest / f"{cname}.log").write_text(logs)
+
+    # Executor-level diagnostics (RemoteExecutor: SSH master state + tunnels).
+    # Distinguishes a dead control master from other failures (issue #5).
+    dump_diag = getattr(executor, "dump_diagnostics", None)
+    if callable(dump_diag):
+        try:
+            dump_diag(dest)
+        except Exception as exc:  # noqa: BLE001
+            (dest / "diagnostics-error.txt").write_text(repr(exc))

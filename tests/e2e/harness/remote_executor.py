@@ -6,7 +6,7 @@ import json
 import logging
 import shlex
 import uuid
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 
 from tests.e2e.harness.endpoint import DeviceEndpoint, Lab
 from tests.e2e.harness.executor import Executor
@@ -118,6 +118,10 @@ class RemoteExecutor(Executor):
     def container_logs(self, container_name: str, tail: int = 200) -> str:
         proc = self._master.run(["docker", "logs", "--tail", str(tail), container_name])
         return proc.stdout + "\n--- stderr ---\n" + proc.stderr
+
+    def dump_diagnostics(self, dest: Path) -> None:
+        """Write executor-level diagnostics (ssh master state, tunnels) for failure artifacts."""
+        self._master.dump_state(dest)
 
     def close(self) -> None:
         self._master.close()
