@@ -13,7 +13,13 @@ from tests.e2e.harness.endpoint import DeviceEndpoint, Lab
 from tests.e2e.harness.executor import Executor
 from tests.e2e.harness.health import wait_ssh_open
 from tests.e2e.harness.images import ImageProbe
-from tests.e2e.harness.inspect import HEALTH_DEADLINE_S, extract_ipv4, find_node
+from tests.e2e.harness.inspect import (
+    HEALTH_DEADLINE_S,
+    SMOKE_BACKOFF_S,
+    SMOKE_RETRIES,
+    extract_ipv4,
+    find_node,
+)
 from tests.e2e.harness.topology import Topology
 
 logger = logging.getLogger(__name__)
@@ -94,7 +100,10 @@ class LocalExecutor(Executor):
 
         from tests.e2e.harness.connect import smoke_test_connect
 
-        smoke_test_connect(host, 22, vendor.username, vendor.password, vendor.netmiko_type)
+        smoke_test_connect(
+            host, 22, vendor.username, vendor.password, vendor.netmiko_type,
+            retries=SMOKE_RETRIES.get(kind, 3), backoff_s=SMOKE_BACKOFF_S,
+        )
 
         return DeviceEndpoint(
             name=node_name,

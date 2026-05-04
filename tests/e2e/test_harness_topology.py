@@ -14,8 +14,10 @@ from unittest.mock import patch
 import pytest
 import yaml
 
+from tests.e2e.harness.connect import smoke_test_connect
 from tests.e2e.harness.health import wait_ssh_open
 from tests.e2e.harness.images import ImageProbe
+from tests.e2e.harness.inspect import HEALTH_DEADLINE_S, SMOKE_RETRIES
 from tests.e2e.harness.topology import Node, Topology
 from tests.e2e.harness.vendor import VENDORS, Vendor
 from tests.e2e.topologies import isolated, session_three_vendor
@@ -175,3 +177,41 @@ class TestHealthGate:
         port = s.getsockname()[1]
         s.close()
         assert wait_ssh_open("127.0.0.1", port, deadline_s=2, delays=(1,)) is False
+
+
+class TestSmokeConnect:
+    def test_succeeds_on_first_attempt(self) -> None:
+        with patch("netmiko.ConnectHandler") as mock_conn, \
+             patch("tests.e2e.harness.connect.time.sleep") as mock_sleep:
+            mock_conn.return_value.disconnect.return_value = None
+            smoke_test_connect("h", 22, "u", "p", "ceos", retries=5, backoff_s=0)
+            assert mock_conn.call_count == 1
+            assert mock_sleep.call_count == 0
+
+    def test_retries_then_succeeds(self) -> None:
+        with patch("netmiko.ConnectHandler") as mock_conn, \
+             patch("tests.e2e.harness.connect.time.sleep"):
+            ok = type("Ok", (), {"disconnect": lambda self: None})()
+            mock_conn.side_effect = [RuntimeError("banner reset"), RuntimeError("prompt"), ok]
+            smoke_test_connect("h", 22, "u", "p", "ceos", retries=5, backoff_s=0)
+            assert mock_conn.call_count == 3
+
+    def test_raises_after_exhausting_budget(self) -> None:
+        with patch("netmiko.ConnectHandler") as mock_conn, \
+             patch("tests.e2e.harness.connect.time.sleep"):
+            mock_conn.side_effect = RuntimeError("nope")
+            with pytest.raises(RuntimeError, match="after 4 attempts"):
+                smoke_test_connect("h", 22, "u", "p", "ceos", retries=4, backoff_s=0)
+            assert mock_conn.call_count == 4
+
+
+class TestPerVendorBudgets:
+    def test_ceos_deadline_covers_remote_clab(self) -> None:
+        # Issue #4: 180s was insufficient on remote clab.
+        assert HEALTH_DEADLINE_S["ceos"] >= 300
+
+    def test_smoke_retries_cover_known_flaky_vendors(self) -> None:
+        # Issues #4 (cEOS banner reset) and #7 (nokia_srl prompt detection)
+        # both need a budget >3 to ride out the SSH-up race on remote clab.
+        assert SMOKE_RETRIES["ceos"] > 3
+        assert SMOKE_RETRIES["nokia_srlinux"] > 3

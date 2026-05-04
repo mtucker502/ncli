@@ -11,8 +11,20 @@ from __future__ import annotations
 HEALTH_DEADLINE_S: dict[str, int] = {
     "crpd": 60,
     "nokia_srlinux": 60,
-    "ceos": 180,
+    "ceos": 300,
 }
+
+# Per-vendor smoke-connect retry budget. wait_ssh_open returns true on TCP open,
+# but the SSH daemon may not be fully ready: cEOS resets the banner read, and
+# nokia_srlinux's prompt detection can race the device's CLI init. Generous
+# retries cover the gap; the first attempt usually succeeds so this does not
+# slow healthy runs.
+SMOKE_RETRIES: dict[str, int] = {
+    "crpd": 3,
+    "nokia_srlinux": 6,
+    "ceos": 10,
+}
+SMOKE_BACKOFF_S: float = 3.0
 
 
 def find_node(inspect_doc: dict, lab_name: str, node_name: str) -> dict:
