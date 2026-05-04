@@ -9,7 +9,13 @@ ncli config show asa-01
 ncli config show asa-01 interface    # section filter (IOS-style)
 ```
 
-Under the hood this runs `show running-config` (or `show running-config | section <filter>`).
+Under the hood the command sent depends on the device's `device_type`:
+
+- Cisco-style platforms (`cisco_ios`, `cisco_xe`, `cisco_nxos`, `cisco_asa`, `cisco_xr`/`cisco_iosxr`, `arista_eos`): `show running-config` (or `show running-config | section <filter>`).
+- Junos (`juniper_junos`): `show configuration [<filter>] | display set | no-more`.
+- Nokia SR Linux (`nokia_srl`): `info` (or `info <filter>`).
+
+Other vendors raise `NotImplementedError` until explicit support is added.
 
 ## Config Diff
 

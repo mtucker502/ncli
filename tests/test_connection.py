@@ -322,3 +322,47 @@ class TestNetmikoConnectionSendConfig:
             "show configuration system services | display set | no-more"
         )
         assert result == "set system services ssh"
+
+    @patch("ncli.device.connection.ConnectHandler")
+    def test_get_config_nokia_srl(
+        self, mock_handler: MagicMock, credentials: Credentials
+    ) -> None:
+        mock_conn = MagicMock()
+        mock_conn.send_command.return_value = "system { ... }"
+        mock_handler.return_value = mock_conn
+        srl_cfg = {"device_type": "nokia_srl", "host": "10.0.0.1", "port": 22, "timeout": 30}
+
+        with NetmikoConnection("dev1", srl_cfg, credentials) as conn:
+            result = conn.get_config()
+
+        mock_conn.send_command.assert_called_once_with("info")
+        assert result == "system { ... }"
+
+    @patch("ncli.device.connection.ConnectHandler")
+    def test_get_config_nokia_srl_with_section(
+        self, mock_handler: MagicMock, credentials: Credentials
+    ) -> None:
+        mock_conn = MagicMock()
+        mock_conn.send_command.return_value = "system { hostname srl1 }"
+        mock_handler.return_value = mock_conn
+        srl_cfg = {"device_type": "nokia_srl", "host": "10.0.0.1", "port": 22, "timeout": 30}
+
+        with NetmikoConnection("dev1", srl_cfg, credentials) as conn:
+            result = conn.get_config(section="system")
+
+        mock_conn.send_command.assert_called_once_with("info system")
+        assert result == "system { hostname srl1 }"
+
+    @patch("ncli.device.connection.ConnectHandler")
+    def test_get_config_unknown_vendor_raises(
+        self, mock_handler: MagicMock, credentials: Credentials
+    ) -> None:
+        mock_conn = MagicMock()
+        mock_handler.return_value = mock_conn
+        unknown_cfg = {"device_type": "huawei", "host": "10.0.0.1", "port": 22, "timeout": 30}
+
+        with NetmikoConnection("dev1", unknown_cfg, credentials) as conn:
+            with pytest.raises(NotImplementedError, match="huawei"):
+                conn.get_config()
+
+        mock_conn.send_command.assert_not_called()

@@ -24,6 +24,19 @@ _ERROR_PATTERNS = (
 )
 
 _JUNOS_PLATFORMS = frozenset({"junos", "juniper", "juniper_junos"})
+_SRL_PLATFORMS = frozenset({"nokia_srl"})
+# Cisco-style CLIs that respond to `show running-config [| section <name>]`.
+_CISCO_LIKE_PLATFORMS = frozenset(
+    {
+        "cisco_ios",
+        "cisco_xe",
+        "cisco_nxos",
+        "cisco_asa",
+        "cisco_xr",
+        "cisco_iosxr",
+        "arista_eos",
+    }
+)
 
 
 class NetmikoConnection:
@@ -201,7 +214,13 @@ class NetmikoConnection:
         section:
             Optional section filter. Cisco-style: ``"interface"`` becomes
             ``| section interface``. Junos-style: ``"system services"``
-            becomes ``show configuration system services``.
+            becomes ``show configuration system services``. SR Linux:
+            ``"system"`` becomes ``info system``.
+
+        Raises
+        ------
+        NotImplementedError
+            If the device's ``device_type`` has no known config-dump command.
         """
         conn = self._ensure_connected()
 
@@ -212,10 +231,19 @@ class NetmikoConnection:
             if section:
                 base = f"{base} {section}"
             cmd = f"{base} | display set | no-more"
-        else:
+        elif device_type in _SRL_PLATFORMS:
+            cmd = f"info {section}" if section else "info"
+        elif device_type in _CISCO_LIKE_PLATFORMS:
             cmd = "show running-config"
             if section:
                 cmd = f"{cmd} | section {section}"
+        else:
+            raise NotImplementedError(
+                f"get_config is not implemented for device_type "
+                f"'{device_type}'. Add it to _JUNOS_PLATFORMS, "
+                f"_SRL_PLATFORMS, or _CISCO_LIKE_PLATFORMS in "
+                f"ncli.device.connection."
+            )
 
         output: str = conn.send_command(cmd)
         return output
