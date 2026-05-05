@@ -193,7 +193,11 @@ class TestSmokeConnect:
     def test_retries_then_succeeds(self) -> None:
         with patch("netmiko.ConnectHandler") as mock_conn, \
              patch("tests.e2e.harness.connect.time.sleep"):
-            ok = type("Ok", (), {"disconnect": lambda self: None})()
+            ok = type(
+                "Ok", (),
+                {"disconnect": lambda self: None,
+                 "send_command": lambda self, *a, **kw: ""},
+            )()
             mock_conn.side_effect = [RuntimeError("banner reset"), RuntimeError("prompt"), ok]
             smoke_test_connect("h", 22, "u", "p", "ceos", retries=5, backoff_s=0)
             assert mock_conn.call_count == 3
@@ -205,6 +209,76 @@ class TestSmokeConnect:
             with pytest.raises(RuntimeError, match="after 4 attempts"):
                 smoke_test_connect("h", 22, "u", "p", "ceos", retries=4, backoff_s=0)
             assert mock_conn.call_count == 4
+
+    def test_arista_eos_runs_readiness_command(self) -> None:
+        # cEOS sshd accepts connections during EOS Warmup Service startup but
+        # the CLI lags briefly. Sending a real command ensures the session can
+        # actually carry data, not just that prompt detection succeeded.
+        from unittest.mock import MagicMock
+        with patch("netmiko.ConnectHandler") as mock_conn, \
+             patch("tests.e2e.harness.connect.time.sleep"):
+            mock_inner = MagicMock()
+            mock_conn.return_value = mock_inner
+            smoke_test_connect("h", 22, "u", "p", "arista_eos", retries=3, backoff_s=0)
+            mock_inner.send_command.assert_called_once_with("show version", read_timeout=30)
+            mock_inner.disconnect.assert_called_once()
+
+    def test_nokia_srl_runs_readiness_command(self) -> None:
+        from unittest.mock import MagicMock
+        with patch("netmiko.ConnectHandler") as mock_conn, \
+             patch("tests.e2e.harness.connect.time.sleep"):
+            mock_inner = MagicMock()
+            mock_conn.return_value = mock_inner
+            smoke_test_connect("h", 22, "u", "p", "nokia_srl", retries=3, backoff_s=0)
+            mock_inner.send_command.assert_called_once_with(
+                "info system information", read_timeout=30
+            )
+            mock_inner.disconnect.assert_called_once()
+
+    def test_unknown_device_type_only_connects(self) -> None:
+        # Vendors without an exercise hook fall back to connect-only.
+        from unittest.mock import MagicMock
+        with patch("netmiko.ConnectHandler") as mock_conn, \
+             patch("tests.e2e.harness.connect.time.sleep"):
+            mock_inner = MagicMock()
+            mock_conn.return_value = mock_inner
+            smoke_test_connect("h", 22, "u", "p", "ios_xe_unknown", retries=3, backoff_s=0)
+            mock_inner.send_command.assert_not_called()
+            mock_inner.disconnect.assert_called_once()
+
+    def test_paramiko_logger_restored_after_smoke(self) -> None:
+        # The retry loop temporarily silences paramiko.transport to suppress
+        # the noisy banner-reset stack traces. The pre-loop level must be
+        # restored even on success so unrelated paramiko errors aren't hidden
+        # for the rest of the session.
+        import logging as _logging
+        from unittest.mock import MagicMock
+        paramiko_log = _logging.getLogger("paramiko.transport")
+        prev = paramiko_log.level
+        paramiko_log.setLevel(_logging.WARNING)
+        try:
+            with patch("netmiko.ConnectHandler") as mock_conn, \
+                 patch("tests.e2e.harness.connect.time.sleep"):
+                mock_conn.return_value = MagicMock()
+                smoke_test_connect("h", 22, "u", "p", "ceos", retries=3, backoff_s=0)
+            assert paramiko_log.level == _logging.WARNING
+        finally:
+            paramiko_log.setLevel(prev)
+
+    def test_paramiko_logger_restored_after_smoke_failure(self) -> None:
+        import logging as _logging
+        paramiko_log = _logging.getLogger("paramiko.transport")
+        prev = paramiko_log.level
+        paramiko_log.setLevel(_logging.INFO)
+        try:
+            with patch("netmiko.ConnectHandler") as mock_conn, \
+                 patch("tests.e2e.harness.connect.time.sleep"):
+                mock_conn.side_effect = RuntimeError("nope")
+                with pytest.raises(RuntimeError):
+                    smoke_test_connect("h", 22, "u", "p", "ceos", retries=2, backoff_s=0)
+            assert paramiko_log.level == _logging.INFO
+        finally:
+            paramiko_log.setLevel(prev)
 
 
 class TestSshMasterKeepalive:

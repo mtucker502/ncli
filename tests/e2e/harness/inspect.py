@@ -15,10 +15,12 @@ HEALTH_DEADLINE_S: dict[str, int] = {
 }
 
 # Per-vendor smoke-connect retry budget. wait_ssh_open returns true on TCP open,
-# but the SSH daemon may not be fully ready: cEOS resets the banner read, and
-# nokia_srlinux's prompt detection can race the device's CLI init. Generous
-# retries cover the gap; the first attempt usually succeeds so this does not
-# slow healthy runs.
+# but the SSH daemon may not be fully ready: cEOS resets the banner read while
+# `EOS Warmup Service` is starting and only allows publickey/keyboard-interactive
+# auth until the startup-config-defined `admin` user is created (~30-60s after
+# TCP 22 opens). nokia_srlinux's prompt detection can race the device's CLI init.
+# Generous retries cover both gaps; the first attempt usually succeeds so this
+# does not slow healthy runs.
 SMOKE_RETRIES: dict[str, int] = {
     "crpd": 3,
     "nokia_srlinux": 6,
