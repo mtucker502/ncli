@@ -34,3 +34,7 @@ htmlcov/
 
 # Local inventory
 inventory.yaml
+
+# Local agent instructions (untracked)
+CLAUDE.md
+.claude/
