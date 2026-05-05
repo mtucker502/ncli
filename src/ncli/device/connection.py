@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from typing import TYPE_CHECKING
 
 from netmiko import ConnectHandler
@@ -107,8 +108,33 @@ class NetmikoConnection:
         if "disabled_algorithms" in self.device_config:
             params["disabled_algorithms"] = self.device_config["disabled_algorithms"]
 
+        # cEOS's Netmiko driver matches the post-config-mode prompt with
+        # `read_until_pattern`, whose default 10s budget is too tight on
+        # SSH-forwarded sessions to a busy clab host: `configure terminal`
+        # echoes back, but the new `(config)#` prompt arrives later than 10s
+        # and config_mode() raises ReadTimeout. Bump the per-call read budget.
+        if self.device_config["device_type"] == "arista_eos":
+            params.setdefault("read_timeout_override", 60.0)
+
+        # Optional Netmiko session log path (raw on-the-wire capture). Useful
+        # for diagnosing prompt-detection / read-pattern failures. Set via
+        # device_config["session_log"] or env var NCLI_SESSION_LOG_DIR (a per-
+        # device file `<dir>/<device_name>.log` is written).
+        log_dir = os.environ.get("NCLI_SESSION_LOG_DIR")
+        if "session_log" in self.device_config:
+            params["session_log"] = self.device_config["session_log"]
+        elif log_dir:
+            params["session_log"] = os.path.join(log_dir, f"{self.device_name}.log")
+
         logger.info("Connecting to %s (%s)", self.device_name, params["host"])
         self.net_connect = ConnectHandler(**params)
+        # Cisco-style platforms (incl. cEOS) land in user mode `>` even with
+        # `username admin privilege 15`; without enable(), `show running-config`
+        # returns "% Invalid input (privileged mode required)" and `configure
+        # terminal` is rejected. enable() is a no-op when already in enable
+        # mode, so it's safe to run unconditionally on connect.
+        if self.device_config["device_type"] in _CISCO_LIKE_PLATFORMS:
+            self.net_connect.enable()
         logger.info("Connected to %s", self.device_name)
 
     def disconnect(self) -> None:

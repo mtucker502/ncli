@@ -14,9 +14,18 @@ import subprocess
 from typing import Any
 
 
+# Diagnostic NCLI_* env vars that subprocesses should inherit. Behavior knobs
+# (NCLI_BLOCK_CMD, NCLI_USERNAME, ...) are still stripped to guard against
+# contributor-shell leakage; pure-diagnostic capture vars are kept.
+_NCLI_PASSTHROUGH = frozenset({"NCLI_SESSION_LOG_DIR"})
+
+
 def clean_env(overrides: dict[str, str] | None = None) -> dict[str, str]:
-    """Return os.environ with all NCLI_* variables stripped, then `overrides` merged in."""
-    base = {k: v for k, v in os.environ.items() if not k.startswith("NCLI_")}
+    """Return os.environ with behavior-affecting NCLI_* stripped, then `overrides` merged in."""
+    base = {
+        k: v for k, v in os.environ.items()
+        if not k.startswith("NCLI_") or k in _NCLI_PASSTHROUGH
+    }
     if overrides:
         base.update(overrides)
     return base

@@ -103,6 +103,66 @@ class TestNetmikoConnectionContextManager:
         conn.disconnect()
 
     @patch("ncli.device.connection.ConnectHandler")
+    def test_connect_arista_eos_bumps_read_timeout_override(
+        self, mock_handler: MagicMock, credentials: Credentials
+    ) -> None:
+        # cEOS's `(config)#` prompt arrives slowly on SSH-forwarded sessions;
+        # bump Netmiko's per-call read budget so config_mode() doesn't time out.
+        mock_handler.return_value = MagicMock()
+        eos_config = {"device_type": "arista_eos", "host": "10.0.0.2", "port": 22}
+
+        conn = NetmikoConnection("eos1", eos_config, credentials)
+        conn.connect()
+
+        call_kwargs = mock_handler.call_args[1]
+        assert call_kwargs["read_timeout_override"] == 60.0
+        conn.disconnect()
+
+    @patch("ncli.device.connection.ConnectHandler")
+    def test_connect_non_arista_no_read_timeout_override(
+        self, mock_handler: MagicMock, device_config: dict, credentials: Credentials
+    ) -> None:
+        mock_handler.return_value = MagicMock()
+        conn = NetmikoConnection("dev1", device_config, credentials)
+        conn.connect()
+
+        call_kwargs = mock_handler.call_args[1]
+        assert "read_timeout_override" not in call_kwargs
+        conn.disconnect()
+
+    @patch("ncli.device.connection.ConnectHandler")
+    def test_connect_enables_for_cisco_like_platforms(
+        self, mock_handler: MagicMock, credentials: Credentials
+    ) -> None:
+        # cEOS / cisco_ios land in user mode `>` even with privilege 15;
+        # without enable(), config push and `show running-config` both fail
+        # with "% Invalid input (privileged mode required)".
+        mock_conn = MagicMock()
+        mock_handler.return_value = mock_conn
+        eos_config = {"device_type": "arista_eos", "host": "10.0.0.2"}
+
+        conn = NetmikoConnection("eos1", eos_config, credentials)
+        conn.connect()
+
+        mock_conn.enable.assert_called_once()
+        conn.disconnect()
+
+    @patch("ncli.device.connection.ConnectHandler")
+    def test_connect_does_not_enable_for_juniper(
+        self, mock_handler: MagicMock, credentials: Credentials
+    ) -> None:
+        # Junos has no enable mode; calling enable() would error.
+        mock_conn = MagicMock()
+        mock_handler.return_value = mock_conn
+        junos_config = {"device_type": "juniper_junos", "host": "10.0.0.3"}
+
+        conn = NetmikoConnection("vmx", junos_config, credentials)
+        conn.connect()
+
+        mock_conn.enable.assert_not_called()
+        conn.disconnect()
+
+    @patch("ncli.device.connection.ConnectHandler")
     def test_connect_with_ssh_agent(
         self, mock_handler: MagicMock, device_config: dict, agent_credentials: Credentials
     ) -> None:
