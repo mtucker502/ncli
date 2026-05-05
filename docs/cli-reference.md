@@ -33,6 +33,7 @@ ncli [OPTIONS] COMMAND [ARGS]...
 | `NCLI_ENABLE_SECRET` | Override enable secret for all devices |
 | `NCLI_BLOCK_CMD` | Path to command blocklist file |
 | `NCLI_BLOCK_CFG` | Path to config blocklist file |
+| `NCLI_SESSION_LOG_DIR` | Directory to write per-device Netmiko session logs (`<dir>/<device_name>.log`). Useful for diagnosing prompt-detection / read-pattern failures. |
 
 ---
 

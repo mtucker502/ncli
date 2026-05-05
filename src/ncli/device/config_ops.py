@@ -113,6 +113,8 @@ def config_diff(
     # Normalize trailing newlines so that a candidate captured from
     # `ncli config show` stdout (which gains an extra '\n' from click.echo)
     # diffs cleanly against the internal running-config text.
+    # Side effect (intentional): suppresses difflib's `\ No newline at end
+    # of file` markers, which would be misleading noise here.
     running_lines = running.rstrip("\n").splitlines(keepends=True)
     candidate_lines = candidate.rstrip("\n").splitlines(keepends=True)
 
