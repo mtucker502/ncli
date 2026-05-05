@@ -9,9 +9,12 @@ from ncli.device.connection import NetmikoConnection
 
 logger = logging.getLogger(__name__)
 
-# Platforms whose Netmiko drivers expose a commit() method.
+# Platforms whose Netmiko drivers expose a real commit() method that we want
+# called after send_config(). Notably excludes arista_eos: Netmiko's arista
+# driver inherits BaseConnection.commit(), which raises AttributeError, and
+# the default `configure terminal` config mode is immediate (no commit needed).
 _COMMIT_PLATFORMS = frozenset(
-    {"junos", "juniper", "juniper_junos", "arista_eos", "cisco_xr", "cisco_iosxr"}
+    {"junos", "juniper", "juniper_junos", "cisco_xr", "cisco_iosxr", "nokia_srl"}
 )
 _JUNOS_PLATFORMS = frozenset({"junos", "juniper", "juniper_junos"})
 
