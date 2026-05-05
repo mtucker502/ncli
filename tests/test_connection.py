@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from ncli.auth.base import Credentials
+from ncli.device import connection as connection_module
 from ncli.device.connection import NetmikoConnection
 
 
@@ -414,15 +416,35 @@ class TestNetmikoConnectionSendConfig:
         assert result == "system { hostname srl1 }"
 
     @patch("ncli.device.connection.ConnectHandler")
-    def test_get_config_unknown_vendor_raises(
-        self, mock_handler: MagicMock, credentials: Credentials
+    def test_get_config_unknown_vendor_falls_back_with_warning(
+        self,
+        mock_handler: MagicMock,
+        credentials: Credentials,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         mock_conn = MagicMock()
+        mock_conn.send_command.return_value = "running config output"
         mock_handler.return_value = mock_conn
         unknown_cfg = {"device_type": "huawei", "host": "10.0.0.1", "port": 22, "timeout": 30}
 
-        with NetmikoConnection("dev1", unknown_cfg, credentials) as conn:
-            with pytest.raises(NotImplementedError, match="huawei"):
-                conn.get_config()
+        connection_module._warned_device_types.discard("huawei")
+        caplog.set_level(logging.WARNING, logger="ncli.device.connection")
 
-        mock_conn.send_command.assert_not_called()
+        with NetmikoConnection("dev1", unknown_cfg, credentials) as conn:
+            result1 = conn.get_config()
+            result2 = conn.get_config()
+
+        assert result1 == "running config output"
+        assert result2 == "running config output"
+        assert mock_conn.send_command.call_count == 2
+        for call in mock_conn.send_command.call_args_list:
+            assert call.args == ("show running-config",)
+
+        warnings = [
+            r
+            for r in caplog.records
+            if r.levelno == logging.WARNING
+            and r.name == "ncli.device.connection"
+            and "huawei" in r.getMessage()
+        ]
+        assert len(warnings) == 1

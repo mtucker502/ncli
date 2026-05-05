@@ -39,6 +39,8 @@ _CISCO_LIKE_PLATFORMS = frozenset(
     }
 )
 
+_warned_device_types: set[str] = set()
+
 
 class NetmikoConnection:
     """Wrapper around a Netmiko connection with context-manager support.
@@ -243,10 +245,11 @@ class NetmikoConnection:
             becomes ``show configuration system services``. SR Linux:
             ``"system"`` becomes ``info system``.
 
-        Raises
-        ------
-        NotImplementedError
-            If the device's ``device_type`` has no known config-dump command.
+        Notes
+        -----
+        Unrecognized ``device_type`` values fall back to
+        ``show running-config`` (with ``| section <name>`` when a section is
+        passed) and emit a one-time warning per process per device_type.
         """
         conn = self._ensure_connected()
 
@@ -264,12 +267,18 @@ class NetmikoConnection:
             if section:
                 cmd = f"{cmd} | section {section}"
         else:
-            raise NotImplementedError(
-                f"get_config is not implemented for device_type "
-                f"'{device_type}'. Add it to _JUNOS_PLATFORMS, "
-                f"_SRL_PLATFORMS, or _CISCO_LIKE_PLATFORMS in "
-                f"ncli.device.connection."
-            )
+            if device_type not in _warned_device_types:
+                _warned_device_types.add(device_type)
+                logger.warning(
+                    "device_type '%s' is not explicitly supported by "
+                    "get_config; falling back to `show running-config`. "
+                    "Add it to _CISCO_LIKE_PLATFORMS, _JUNOS_PLATFORMS, "
+                    "or _SRL_PLATFORMS to silence this warning.",
+                    device_type,
+                )
+            cmd = "show running-config"
+            if section:
+                cmd = f"{cmd} | section {section}"
 
         output: str = conn.send_command(cmd)
         return output
