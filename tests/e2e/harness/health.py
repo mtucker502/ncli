@@ -21,8 +21,14 @@ def wait_ssh_open(host: str, port: int, *, deadline_s: float, delays: tuple[int,
             sock.settimeout(2.0)
             if sock.connect_ex((host, port)) == 0:
                 return True
+        # Cap the backoff sleep at the remaining deadline so a long delay
+        # entry (e.g. 32s) doesn't push us well past `deadline_s`.
+        remaining = deadline_s - (time.monotonic() - started)
+        if remaining <= 0:
+            return False
         try:
-            time.sleep(next(delay_iter))
+            chosen_delay = next(delay_iter)
         except StopIteration:
-            time.sleep(8)
+            chosen_delay = 8
+        time.sleep(min(chosen_delay, remaining))
     return False

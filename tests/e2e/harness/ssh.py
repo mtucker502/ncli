@@ -12,11 +12,15 @@ import os
 import socket
 import subprocess
 import tempfile
+import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_TIMEOUT_S = 600
+CONTROL_OP_TIMEOUT_S = 30
 
 
 def alloc_local_port() -> int:
@@ -39,8 +43,16 @@ class SshMaster:
     _control_path: str = field(init=False)
 
     def __post_init__(self) -> None:
-        self._socket_dir = tempfile.TemporaryDirectory(prefix="ncli-e2e-ssh-")
+        # UNIX socket path max is 104 on macOS / 108 on Linux. macOS $TMPDIR
+        # under /var/folders/<2>/<long-random>/T/ leaves almost no headroom
+        # once the prefix and `cm-<8hex>` socket name are appended, so anchor
+        # under /tmp (present on both platforms).
+        self._socket_dir = tempfile.TemporaryDirectory(prefix="ne-ssh-", dir="/tmp")
         self._control_path = os.path.join(self._socket_dir.name, f"cm-{uuid.uuid4().hex[:8]}")
+        assert len(self._control_path) < 100, (
+            f"ssh ControlPath too long ({len(self._control_path)} bytes): "
+            f"{self._control_path}"
+        )
 
     @property
     def control_path(self) -> str:
@@ -72,23 +84,88 @@ class SshMaster:
         if proc.returncode != 0:
             raise RuntimeError(f"ssh master open failed: {proc.stderr}")
 
-    def run(self, remote_cmd: list[str]) -> subprocess.CompletedProcess[str]:
+    def run(
+        self, remote_cmd: list[str], *, timeout: float = DEFAULT_TIMEOUT_S
+    ) -> subprocess.CompletedProcess[str]:
         """Run a command on the remote host. argv-style — no shell quoting needed."""
         argv = [*self.base_args(), "--", *remote_cmd]
-        return subprocess.run(argv, capture_output=True, text=True)
+        started = time.monotonic()
+        try:
+            return subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+        except subprocess.TimeoutExpired as exc:
+            elapsed = time.monotonic() - started
+            raise RuntimeError(
+                f"ssh run timed out on {self.host} after {elapsed:.1f}s: argv={argv} "
+                f"stdout={exc.stdout!r} stderr={exc.stderr!r}"
+            ) from exc
 
-    def run_with_stdin(self, remote_cmd: list[str], stdin: str) -> subprocess.CompletedProcess[str]:
+    def run_with_stdin(
+        self, remote_cmd: list[str], stdin: str, *, timeout: float = DEFAULT_TIMEOUT_S
+    ) -> subprocess.CompletedProcess[str]:
         """Run a remote command with `stdin` piped in. Used to stage files via `cat > path`."""
         argv = [*self.base_args(), "--", *remote_cmd]
-        return subprocess.run(argv, input=stdin, capture_output=True, text=True)
+        started = time.monotonic()
+        try:
+            return subprocess.run(
+                argv, input=stdin, capture_output=True, text=True, timeout=timeout
+            )
+        except subprocess.TimeoutExpired as exc:
+            elapsed = time.monotonic() - started
+            raise RuntimeError(
+                f"ssh run_with_stdin timed out on {self.host} after {elapsed:.1f}s: argv={argv} "
+                f"stdout={exc.stdout!r} stderr={exc.stderr!r}"
+            ) from exc
 
     def forward(self, local_port: int, remote_host: str, remote_port: int) -> None:
         """Open an L-style tunnel via the existing master."""
         argv = [*self.base_args(), "-O", "forward", "-L", f"{local_port}:{remote_host}:{remote_port}"]
-        proc = subprocess.run(argv, capture_output=True, text=True)
+        started = time.monotonic()
+        try:
+            proc = subprocess.run(
+                argv, capture_output=True, text=True, timeout=CONTROL_OP_TIMEOUT_S
+            )
+        except subprocess.TimeoutExpired as exc:
+            elapsed = time.monotonic() - started
+            raise RuntimeError(
+                f"ssh forward timed out on {self.host} after {elapsed:.1f}s "
+                f"({local_port}->{remote_host}:{remote_port}): "
+                f"stdout={exc.stdout!r} stderr={exc.stderr!r}"
+            ) from exc
         if proc.returncode != 0:
             raise RuntimeError(f"ssh forward failed ({local_port}->{remote_host}:{remote_port}): {proc.stderr}")
         self._tunnels.append((local_port, remote_host, remote_port))
+
+    def cancel_forward(
+        self, local_port: int, remote_host: str, remote_port: int
+    ) -> subprocess.CompletedProcess[str]:
+        """Tear down an L-style tunnel via the existing master.
+
+        Best-effort: returns the CompletedProcess (or a synthetic one on
+        timeout) rather than raising, so callers in cleanup paths can log
+        and move on. The matching tuple is removed from `self._tunnels`
+        if present, regardless of returncode.
+        """
+        argv = [
+            *self.base_args(),
+            "-O", "cancel",
+            "-L", f"{local_port}:{remote_host}:{remote_port}",
+        ]
+        try:
+            proc = subprocess.run(
+                argv, capture_output=True, text=True, timeout=CONTROL_OP_TIMEOUT_S
+            )
+        except subprocess.TimeoutExpired as exc:
+            proc = subprocess.CompletedProcess(
+                args=argv,
+                returncode=255,
+                stdout=exc.stdout or "",
+                stderr=f"timeout after {CONTROL_OP_TIMEOUT_S}s",
+            )
+        try:
+            self._tunnels.remove((local_port, remote_host, remote_port))
+        except ValueError:
+            pass
+        return proc
 
     def check(self) -> tuple[bool, str]:
         """Probe whether the master is still alive via `ssh -O check`.
@@ -97,7 +174,12 @@ class SshMaster:
         connect fails — distinguishes a dead master from other failures.
         """
         argv = [*self.base_args(), "-O", "check"]
-        proc = subprocess.run(argv, capture_output=True, text=True)
+        try:
+            proc = subprocess.run(
+                argv, capture_output=True, text=True, timeout=CONTROL_OP_TIMEOUT_S
+            )
+        except subprocess.TimeoutExpired:
+            return False, "timeout"
         return proc.returncode == 0, (proc.stdout + proc.stderr).strip()
 
     def dump_state(self, dest: Path) -> None:
@@ -119,5 +201,8 @@ class SshMaster:
 
     def close(self) -> None:
         argv = [*self.base_args(), "-O", "exit"]
-        subprocess.run(argv, capture_output=True, text=True)
+        try:
+            subprocess.run(argv, capture_output=True, text=True, timeout=CONTROL_OP_TIMEOUT_S)
+        except subprocess.TimeoutExpired:
+            pass
         self._socket_dir.cleanup()

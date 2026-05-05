@@ -29,7 +29,10 @@ logger = logging.getLogger(__name__)
 class RemoteExecutor(Executor):
     def __init__(self, host: str, *, user: str | None = None, port: int = 22) -> None:
         self._master = SshMaster(host=host, user=user, port=port)
-        self._tunnels: dict[tuple[str, str], int] = {}  # (lab_name, node_name) -> local_port
+        # (lab_name, node_name) -> (local_port, remote_host, remote_port).
+        # Storing the full tuple lets destroy() issue `ssh -O cancel -L ...`
+        # without re-resolving the remote IP from inspect_raw at teardown.
+        self._tunnels: dict[tuple[str, str], tuple[int, str, int]] = {}
 
     def preflight(self) -> None:
         self._master.open()
@@ -49,7 +52,11 @@ class RemoteExecutor(Executor):
         # Stage the topology YAML into /tmp on the remote.
         remote_dir = PurePosixPath(f"/tmp/{topology.name}-{uuid.uuid4().hex[:6]}")
         remote_yaml = remote_dir / f"{topology.name}.clab.yaml"
-        self._master.run(["mkdir", "-p", str(remote_dir)])
+        mk = self._master.run(["mkdir", "-p", str(remote_dir)])
+        if mk.returncode != 0:
+            raise RuntimeError(
+                f"creating remote staging dir {remote_dir} failed: {mk.stderr}"
+            )
         write_cmd = f"cat > {shlex.quote(str(remote_yaml))}"
         proc = self._master.run_with_stdin(["sh", "-c", write_cmd], topology.to_clab_yaml())
         if proc.returncode != 0:
@@ -63,18 +70,42 @@ class RemoteExecutor(Executor):
             if cfg_proc.returncode != 0:
                 raise RuntimeError(f"writing remote startup-config {basename} failed: {cfg_proc.stderr}")
 
-        r = self._master.run(["containerlab", "deploy", "-t", str(remote_yaml)])
+        r = self._master.run(
+            ["containerlab", "deploy", "-t", str(remote_yaml)], timeout=600
+        )
         if r.returncode != 0:
             raise RuntimeError(f"remote clab deploy failed:\nstdout:\n{r.stdout}\nstderr:\n{r.stderr}")
 
         inspect = self._master.run(
-            ["containerlab", "inspect", "-t", str(remote_yaml), "--format", "json"]
+            ["containerlab", "inspect", "-t", str(remote_yaml), "--format", "json"],
+            timeout=30,
         )
         if inspect.returncode != 0:
             raise RuntimeError(f"remote clab inspect failed: {inspect.stderr}")
         return Lab(name=topology.name, topology_yaml_path=str(remote_yaml), inspect_raw=json.loads(inspect.stdout))
 
     def destroy(self, lab: Lab) -> None:
+        # Drain any local-forwards we opened for this lab. Listeners survive
+        # past clab destroy until master exit otherwise, leaking local ports
+        # across parameterized lab runs. Best-effort — log and move on.
+        for key in [k for k in self._tunnels if k[0] == lab.name]:
+            local_port, remote_host, remote_port = self._tunnels[key]
+            try:
+                cancel = self._master.cancel_forward(local_port, remote_host, remote_port)
+                if cancel.returncode != 0:
+                    logger.warning(
+                        "ssh cancel-forward exited %d for %s/%s (%d->%s:%d): %s",
+                        cancel.returncode, key[0], key[1],
+                        local_port, remote_host, remote_port,
+                        cancel.stderr.strip(),
+                    )
+            except Exception as exc:  # noqa: BLE001 - cleanup is best-effort
+                logger.warning(
+                    "ssh cancel-forward raised for %s/%s (%d->%s:%d): %s",
+                    key[0], key[1], local_port, remote_host, remote_port, exc,
+                )
+            self._tunnels.pop(key, None)
+
         proc = self._master.run(["containerlab", "destroy", "-t", lab.topology_yaml_path, "--cleanup"])
         if proc.returncode != 0:
             logger.warning(
@@ -82,13 +113,43 @@ class RemoteExecutor(Executor):
                 proc.returncode, lab.name, proc.stderr.strip(),
             )
 
+        # Clean up the remote staging dir we created in deploy(). Guard against
+        # accidental wider deletion if a hand-rolled Lab points elsewhere.
+        parent = PurePosixPath(lab.topology_yaml_path).parent
+        parent_str = str(parent)
+        if not parent_str.startswith("/tmp/"):
+            logger.warning(
+                "skipping remote staging cleanup for %s: parent %r outside /tmp/",
+                lab.name, parent_str,
+            )
+            return
+        try:
+            rm = self._master.run(["rm", "-rf", parent_str])
+            if rm.returncode != 0:
+                logger.warning(
+                    "remote staging cleanup failed for %s: %s",
+                    parent_str, rm.stderr.strip(),
+                )
+        except Exception as exc:  # noqa: BLE001 - cleanup is best-effort
+            logger.warning(
+                "remote staging cleanup raised for %s: %s", parent_str, exc,
+            )
+
     def resolve(self, lab: Lab, node_name: str) -> DeviceEndpoint:
         node_doc = find_node(lab.inspect_raw, lab.name, node_name)
         remote_ip = extract_ipv4(node_doc)
 
+        # alloc_local_port closes its probe socket before forward() binds, so a
+        # parallel pytest run can grab the port in between — retry once on bind clash.
         local_port = alloc_local_port()
-        self._master.forward(local_port, remote_ip, 22)
-        self._tunnels[(lab.name, node_name)] = local_port
+        try:
+            self._master.forward(local_port, remote_ip, 22)
+        except RuntimeError as exc:
+            if "Address already in use" not in str(exc):
+                raise
+            local_port = alloc_local_port()
+            self._master.forward(local_port, remote_ip, 22)
+        self._tunnels[(lab.name, node_name)] = (local_port, remote_ip, 22)
 
         kind = node_doc.get("kind") or node_doc.get("Kind", "")
         vendor = next((v for v in VENDORS.values() if v.kind == kind), None)
@@ -116,7 +177,9 @@ class RemoteExecutor(Executor):
         )
 
     def container_logs(self, container_name: str, tail: int = 200) -> str:
-        proc = self._master.run(["docker", "logs", "--tail", str(tail), container_name])
+        proc = self._master.run(
+            ["docker", "logs", "--tail", str(tail), container_name], timeout=30
+        )
         return proc.stdout + "\n--- stderr ---\n" + proc.stderr
 
     def dump_diagnostics(self, dest: Path) -> None:

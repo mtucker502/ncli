@@ -9,6 +9,7 @@ from __future__ import annotations
 import socket
 import subprocess
 import threading
+import time
 from pathlib import Path
 from unittest.mock import patch
 
@@ -127,6 +128,11 @@ class TestTopologyEmission:
         assert empty.nodes == []
         assert empty.required_kinds() == set()
 
+    def test_without_kinds_preserves_name(self) -> None:
+        topo = session_three_vendor()
+        smaller = topo.without_kinds(["ceos"])
+        assert smaller.name == topo.name
+
 
 class TestStartupConfigsPresent:
     def test_all_vendor_startup_configs_exist(self) -> None:
@@ -180,15 +186,34 @@ class TestHealthGate:
         s.close()
         assert wait_ssh_open("127.0.0.1", port, deadline_s=2, delays=(1,)) is False
 
+    def test_returns_within_deadline_when_delays_exceed_it(self) -> None:
+        # Regression: previously the loop slept the full backoff entry after a
+        # failed probe without bounding it by the remaining deadline, so a
+        # `delays=(30, 60)` tuple with `deadline_s=2` could overshoot well
+        # past 2s before returning False.
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+        s.close()
+        deadline_s = 2.0
+        started = time.monotonic()
+        result = wait_ssh_open("127.0.0.1", port, deadline_s=deadline_s, delays=(30, 60))
+        elapsed = time.monotonic() - started
+        assert result is False
+        assert elapsed < deadline_s + 2.0, f"wait_ssh_open overshot deadline: {elapsed:.2f}s"
+
 
 class TestSmokeConnect:
     def test_succeeds_on_first_attempt(self) -> None:
+        from unittest.mock import MagicMock
         with patch("netmiko.ConnectHandler") as mock_conn, \
              patch("tests.e2e.harness.connect.time.sleep") as mock_sleep:
-            mock_conn.return_value.disconnect.return_value = None
-            smoke_test_connect("h", 22, "u", "p", "ceos", retries=5, backoff_s=0)
+            mock_inner = MagicMock()
+            mock_conn.return_value = mock_inner
+            smoke_test_connect("h", 22, "u", "p", "arista_eos", retries=5, backoff_s=0)
             assert mock_conn.call_count == 1
             assert mock_sleep.call_count == 0
+            mock_inner.send_command.assert_called_once_with("show version", read_timeout=30)
 
     def test_retries_then_succeeds(self) -> None:
         with patch("netmiko.ConnectHandler") as mock_conn, \
@@ -337,6 +362,57 @@ class TestSshMasterDiagnostics:
         assert "master_alive: True" in text
         assert "63327 -> 172.20.0.2:22" in text
 
+    def test_cancel_forward_issues_O_cancel_and_removes_tunnel(self) -> None:
+        m = SshMaster(host="example.invalid")
+        m._tunnels.append((54321, "10.0.0.2", 22))
+        with patch("tests.e2e.harness.ssh.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="", stderr="",
+            )
+            proc = m.cancel_forward(54321, "10.0.0.2", 22)
+        assert proc.returncode == 0
+        argv = mock_run.call_args.args[0]
+        assert "-O" in argv
+        assert "cancel" in argv
+        assert "-L" in argv
+        assert "54321:10.0.0.2:22" in argv
+        assert mock_run.call_args.kwargs["timeout"] == 30
+        assert (54321, "10.0.0.2", 22) not in m._tunnels
+
+    def test_cancel_forward_does_not_raise_on_failure(self) -> None:
+        m = SshMaster(host="example.invalid")
+        # Pre-populate so we can verify removal still happens despite rc != 0.
+        m._tunnels.append((54321, "10.0.0.2", 22))
+        with patch("tests.e2e.harness.ssh.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=255, stdout="", stderr="no matching forward\n",
+            )
+            proc = m.cancel_forward(54321, "10.0.0.2", 22)
+        assert proc.returncode == 255
+        assert "no matching forward" in proc.stderr
+        # Removal from local bookkeeping happens regardless of rc.
+        assert (54321, "10.0.0.2", 22) not in m._tunnels
+
+    def test_cancel_forward_handles_timeout_without_raising(self) -> None:
+        m = SshMaster(host="example.invalid")
+        with patch("tests.e2e.harness.ssh.subprocess.run") as mock_run:
+            mock_run.side_effect = subprocess.TimeoutExpired(
+                cmd=["ssh"], timeout=30, output="", stderr="",
+            )
+            proc = m.cancel_forward(54321, "10.0.0.2", 22)
+        assert proc.returncode != 0
+        assert "timeout" in proc.stderr
+
+    def test_cancel_forward_missing_tunnel_is_noop_in_bookkeeping(self) -> None:
+        # Caller may issue cancel for a tuple we never recorded — must not raise.
+        m = SshMaster(host="example.invalid")
+        with patch("tests.e2e.harness.ssh.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="", stderr="",
+            )
+            m.cancel_forward(54321, "10.0.0.2", 22)
+        assert m._tunnels == []
+
 
 class TestPerVendorBudgets:
     def test_ceos_deadline_covers_remote_clab(self) -> None:
@@ -348,3 +424,176 @@ class TestPerVendorBudgets:
         # both need a budget >3 to ride out the SSH-up race on remote clab.
         assert SMOKE_RETRIES["ceos"] > 3
         assert SMOKE_RETRIES["nokia_srlinux"] > 3
+
+
+class TestSshMasterTimeouts:
+    def test_run_propagates_default_timeout(self) -> None:
+        m = SshMaster(host="example.invalid")
+        with patch("tests.e2e.harness.ssh.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="", stderr="",
+            )
+            m.run(["true"])
+            assert mock_run.call_args.kwargs["timeout"] == 600
+
+    def test_run_propagates_explicit_timeout(self) -> None:
+        m = SshMaster(host="example.invalid")
+        with patch("tests.e2e.harness.ssh.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="", stderr="",
+            )
+            m.run(["true"], timeout=42)
+            assert mock_run.call_args.kwargs["timeout"] == 42
+
+    def test_run_raises_runtime_error_on_timeout(self) -> None:
+        m = SshMaster(host="clab01")
+        with patch("tests.e2e.harness.ssh.subprocess.run") as mock_run:
+            mock_run.side_effect = subprocess.TimeoutExpired(
+                cmd=["ssh"], timeout=5, output="partial-stdout", stderr="partial-stderr",
+            )
+            with pytest.raises(RuntimeError, match="timed out") as ei:
+                m.run(["sleep", "9999"], timeout=5)
+            msg = str(ei.value)
+            assert "clab01" in msg
+            assert "sleep" in msg
+
+    def test_run_with_stdin_propagates_default_timeout(self) -> None:
+        m = SshMaster(host="example.invalid")
+        with patch("tests.e2e.harness.ssh.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="", stderr="",
+            )
+            m.run_with_stdin(["sh", "-c", "cat > /tmp/x"], "data")
+            assert mock_run.call_args.kwargs["timeout"] == 600
+
+    def test_run_with_stdin_propagates_explicit_timeout(self) -> None:
+        m = SshMaster(host="example.invalid")
+        with patch("tests.e2e.harness.ssh.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="", stderr="",
+            )
+            m.run_with_stdin(["sh", "-c", "cat > /tmp/x"], "data", timeout=15)
+            assert mock_run.call_args.kwargs["timeout"] == 15
+
+    def test_run_with_stdin_raises_runtime_error_on_timeout(self) -> None:
+        m = SshMaster(host="clab01")
+        with patch("tests.e2e.harness.ssh.subprocess.run") as mock_run:
+            mock_run.side_effect = subprocess.TimeoutExpired(
+                cmd=["ssh"], timeout=5, output="o", stderr="e",
+            )
+            with pytest.raises(RuntimeError, match="timed out"):
+                m.run_with_stdin(["sh", "-c", "cat > /tmp/x"], "data", timeout=5)
+
+    def test_forward_uses_short_control_op_timeout(self) -> None:
+        m = SshMaster(host="example.invalid")
+        with patch("tests.e2e.harness.ssh.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="", stderr="",
+            )
+            m.forward(54321, "10.0.0.2", 22)
+            assert mock_run.call_args.kwargs["timeout"] == 30
+
+    def test_forward_raises_runtime_error_on_timeout(self) -> None:
+        m = SshMaster(host="clab01")
+        with patch("tests.e2e.harness.ssh.subprocess.run") as mock_run:
+            mock_run.side_effect = subprocess.TimeoutExpired(
+                cmd=["ssh"], timeout=30, output="", stderr="",
+            )
+            with pytest.raises(RuntimeError, match="timed out"):
+                m.forward(54321, "10.0.0.2", 22)
+
+    def test_check_returns_false_timeout_on_timeout(self) -> None:
+        m = SshMaster(host="example.invalid")
+        with patch("tests.e2e.harness.ssh.subprocess.run") as mock_run:
+            mock_run.side_effect = subprocess.TimeoutExpired(
+                cmd=["ssh"], timeout=30, output="", stderr="",
+            )
+            alive, output = m.check()
+            assert alive is False
+            assert output == "timeout"
+
+    def test_close_swallows_timeout(self) -> None:
+        m = SshMaster(host="example.invalid")
+        with patch("tests.e2e.harness.ssh.subprocess.run") as mock_run:
+            mock_run.side_effect = subprocess.TimeoutExpired(
+                cmd=["ssh"], timeout=30, output="", stderr="",
+            )
+            m.close()
+
+
+class TestRemoteExecutorPortRetry:
+    def test_resolve_retries_alloc_on_bind_conflict(self) -> None:
+        from tests.e2e.harness.endpoint import Lab
+        from tests.e2e.harness.remote_executor import RemoteExecutor
+
+        executor = RemoteExecutor(host="clab01")
+        lab = Lab(
+            name="testlab",
+            topology_yaml_path="/tmp/x.yaml",
+            inspect_raw={
+                "containers": [
+                    {
+                        "lab_name": "testlab",
+                        "name": "node1",
+                        "kind": "ceos",
+                        "ipv4_address": "10.0.0.2/24",
+                    }
+                ]
+            },
+        )
+
+        forward_calls: list[int] = []
+
+        def fake_forward(local_port: int, remote_host: str, remote_port: int) -> None:
+            forward_calls.append(local_port)
+            if len(forward_calls) == 1:
+                raise RuntimeError(
+                    f"ssh forward failed ({local_port}->{remote_host}:{remote_port}): "
+                    "bind [127.0.0.1]:NNNN: Address already in use"
+                )
+
+        with patch(
+            "tests.e2e.harness.remote_executor.alloc_local_port",
+            side_effect=[10001, 10002],
+        ) as mock_alloc, \
+             patch.object(executor._master, "forward", side_effect=fake_forward), \
+             patch("tests.e2e.harness.remote_executor.wait_ssh_open", return_value=True), \
+             patch("tests.e2e.harness.connect.smoke_test_connect"):
+            ep = executor.resolve(lab, "node1")
+
+        assert mock_alloc.call_count == 2
+        assert forward_calls == [10001, 10002]
+        assert ep.port == 10002
+
+    def test_resolve_does_not_retry_on_unrelated_error(self) -> None:
+        from tests.e2e.harness.endpoint import Lab
+        from tests.e2e.harness.remote_executor import RemoteExecutor
+
+        executor = RemoteExecutor(host="clab01")
+        lab = Lab(
+            name="testlab",
+            topology_yaml_path="/tmp/x.yaml",
+            inspect_raw={
+                "containers": [
+                    {
+                        "lab_name": "testlab",
+                        "name": "node1",
+                        "kind": "ceos",
+                        "ipv4_address": "10.0.0.2/24",
+                    }
+                ]
+            },
+        )
+
+        def fake_forward(local_port: int, remote_host: str, remote_port: int) -> None:
+            raise RuntimeError("ssh forward failed: master not running")
+
+        with patch(
+            "tests.e2e.harness.remote_executor.alloc_local_port",
+            side_effect=[10001, 10002],
+        ) as mock_alloc, \
+             patch.object(executor._master, "forward", side_effect=fake_forward):
+            with pytest.raises(RuntimeError, match="master not running"):
+                executor.resolve(lab, "node1")
+
+        assert mock_alloc.call_count == 1

@@ -8,7 +8,10 @@ from __future__ import annotations
 
 import subprocess
 from dataclasses import dataclass
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
+
+if TYPE_CHECKING:
+    from tests.e2e.harness.ssh import SshMaster
 
 
 @dataclass
@@ -26,7 +29,7 @@ class ImageProbe:
         return cls(_runner=run)
 
     @classmethod
-    def over_ssh(cls, master) -> ImageProbe:  # type: ignore[no-untyped-def]
+    def over_ssh(cls, master: SshMaster) -> ImageProbe:
         def run(argv: list[str]) -> int:
             return master.run(argv).returncode
         return cls(_runner=run)

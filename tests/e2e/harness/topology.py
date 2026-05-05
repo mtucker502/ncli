@@ -39,7 +39,7 @@ class Topology:
         drop = set(kinds)
         return Topology(
             nodes=[copy.deepcopy(n) for n in self.nodes if n.vendor.kind not in drop],
-            name=self.name + "-sub",
+            name=self.name,
         )
 
     def startup_files(self) -> list[tuple[str, Path]]:
