@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from tests.e2e.conftest import device_with_netmiko_type
 from tests.e2e.harness.env import run_ncli
 
 
@@ -19,18 +20,16 @@ def test_config_show_returns_running_config(session_inventory, clab_session) -> 
 
 
 @pytest.mark.clab
-@pytest.mark.parametrize("name_filter,section", [
-    # Junos `show configuration system` is a sensible section probe.
-    ("crpd", "system"),
-    # Arista cEOS `show running-config | section management`.
-    ("ceos", "management"),
+@pytest.mark.parametrize("netmiko_type,section", [
+    ("juniper_junos", "system"),
+    ("arista_eos", "management"),
 ])
-def test_config_show_section_filters(session_inventory, clab_session, name_filter, section) -> None:
-    target = next((n for n in clab_session if name_filter in n), None)
+def test_config_show_section_filters(session_inventory, clab_session, netmiko_type, section) -> None:
+    target = device_with_netmiko_type(clab_session, netmiko_type)
     if target is None:
-        pytest.skip(f"no {name_filter} device in session")
+        pytest.skip(f"no {netmiko_type} device in session")
     proc = run_ncli(
-        ["ncli", "-f", str(session_inventory), "config", "show", target, section],
+        ["ncli", "-f", str(session_inventory), "config", "show", target.name, section],
         capture_output=True, text=True, timeout=120,
     )
     assert proc.returncode == 0, proc.stderr

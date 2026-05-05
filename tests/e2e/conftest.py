@@ -23,6 +23,9 @@ from tests.e2e.topologies import isolated, session_three_vendor
 # Active (lab, executor) pairs — populated by clab_session / isolated_device
 # fixtures, drained on teardown. The pytest_runtest_makereport hook iterates
 # this registry on failure to capture per-container diagnostics.
+# Single-process only: this registry is mutated without locking and is per-
+# process, so pytest-xdist would need a different approach (worker-local
+# registries plus an aggregating reporter).
 _ACTIVE_LABS: list[tuple[Lab, Executor]] = []
 
 
@@ -31,6 +34,17 @@ def pytest_configure(config: pytest.Config) -> None:
         "markers",
         "clab: end-to-end test requiring containerlab (opt in with `-m clab`)",
     )
+
+
+def device_with_netmiko_type(
+    endpoints: dict[str, DeviceEndpoint],
+    netmiko_type: str,
+) -> DeviceEndpoint | None:
+    """Return the first endpoint matching `netmiko_type`, or None."""
+    for ep in endpoints.values():
+        if ep.device_type == netmiko_type:
+            return ep
+    return None
 
 
 @pytest.fixture(scope="session")
@@ -156,7 +170,7 @@ def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo) -> objec
     artifacts_root = Path(item.config.rootpath) / "tests" / "e2e" / "_artifacts" / item.name
     try:
         artifacts_root.mkdir(parents=True, exist_ok=True)
-        (artifacts_root / "stderr.txt").write_text(str(rep.longrepr))
+        (artifacts_root / "stderr.txt").write_text(rep.longreprtext)
         executor = item.funcargs.get("executor")
         if executor is not None:
             (artifacts_root / "executor.txt").write_text(type(executor).__name__)
