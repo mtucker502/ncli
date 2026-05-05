@@ -99,7 +99,7 @@ class TestNetmikoConnectionContextManager:
 
         call_kwargs = mock_handler.call_args[1]
         assert call_kwargs["key_file"] == "/path/to/key"
-        assert "use_keys" not in call_kwargs
+        assert call_kwargs["use_keys"] is True
         conn.disconnect()
 
     @patch("ncli.device.connection.ConnectHandler")
