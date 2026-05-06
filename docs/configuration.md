@@ -2,6 +2,10 @@
 
 NCLI provides tools for viewing, comparing, and pushing device configurations, including Jinja2 template support.
 
+## Connection Behavior
+
+On connect, ncli automatically calls Netmiko's `enable()` for cisco-style platforms (`cisco_ios`, `cisco_xe`, `cisco_nxos`, `cisco_asa`, `cisco_xr`/`cisco_iosxr`, `arista_eos`). Accounts without enable privileges will fail at connect-time with the device's enable error. Set the `secret` (enable password) in your inventory's auth block when the account requires one.
+
 ## Viewing Config
 
 ```bash
@@ -9,7 +13,13 @@ ncli config show asa-01
 ncli config show asa-01 interface    # section filter (IOS-style)
 ```
 
-Under the hood this runs `show running-config` (or `show running-config | section <filter>`).
+Under the hood the command sent depends on the device's `device_type`:
+
+- Cisco-style platforms (`cisco_ios`, `cisco_xe`, `cisco_nxos`, `cisco_asa`, `cisco_xr`/`cisco_iosxr`, `arista_eos`): `show running-config` (or `show running-config | section <filter>`).
+- Junos (`juniper_junos`): `show configuration [<filter>] | display set | no-more`.
+- Nokia SR Linux (`nokia_srl`): `info` (or `info <filter>`).
+
+Unrecognized `device_type`s fall back to `show running-config` and emit a one-time warning. For accurate section filtering, add the platform to the appropriate list in `ncli.device.connection`.
 
 ## Config Diff
 

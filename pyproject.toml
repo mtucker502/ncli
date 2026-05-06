@@ -31,3 +31,7 @@ line-length = 120
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "-m 'not clab'"
+markers = [
+    "clab: end-to-end test requiring containerlab (opt in with `-m clab`)",
+]

@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from ncli.auth.base import Credentials
+from ncli.device import connection as connection_module
 from ncli.device.connection import NetmikoConnection
 
 
@@ -99,7 +101,67 @@ class TestNetmikoConnectionContextManager:
 
         call_kwargs = mock_handler.call_args[1]
         assert call_kwargs["key_file"] == "/path/to/key"
-        assert "use_keys" not in call_kwargs
+        assert call_kwargs["use_keys"] is True
+        conn.disconnect()
+
+    @patch("ncli.device.connection.ConnectHandler")
+    def test_connect_arista_eos_bumps_read_timeout_override(
+        self, mock_handler: MagicMock, credentials: Credentials
+    ) -> None:
+        # cEOS's `(config)#` prompt arrives slowly on SSH-forwarded sessions;
+        # bump Netmiko's per-call read budget so config_mode() doesn't time out.
+        mock_handler.return_value = MagicMock()
+        eos_config = {"device_type": "arista_eos", "host": "10.0.0.2", "port": 22}
+
+        conn = NetmikoConnection("eos1", eos_config, credentials)
+        conn.connect()
+
+        call_kwargs = mock_handler.call_args[1]
+        assert call_kwargs["read_timeout_override"] == 60.0
+        conn.disconnect()
+
+    @patch("ncli.device.connection.ConnectHandler")
+    def test_connect_non_arista_no_read_timeout_override(
+        self, mock_handler: MagicMock, device_config: dict, credentials: Credentials
+    ) -> None:
+        mock_handler.return_value = MagicMock()
+        conn = NetmikoConnection("dev1", device_config, credentials)
+        conn.connect()
+
+        call_kwargs = mock_handler.call_args[1]
+        assert "read_timeout_override" not in call_kwargs
+        conn.disconnect()
+
+    @patch("ncli.device.connection.ConnectHandler")
+    def test_connect_enables_for_cisco_like_platforms(
+        self, mock_handler: MagicMock, credentials: Credentials
+    ) -> None:
+        # cEOS / cisco_ios land in user mode `>` even with privilege 15;
+        # without enable(), config push and `show running-config` both fail
+        # with "% Invalid input (privileged mode required)".
+        mock_conn = MagicMock()
+        mock_handler.return_value = mock_conn
+        eos_config = {"device_type": "arista_eos", "host": "10.0.0.2"}
+
+        conn = NetmikoConnection("eos1", eos_config, credentials)
+        conn.connect()
+
+        mock_conn.enable.assert_called_once()
+        conn.disconnect()
+
+    @patch("ncli.device.connection.ConnectHandler")
+    def test_connect_does_not_enable_for_juniper(
+        self, mock_handler: MagicMock, credentials: Credentials
+    ) -> None:
+        # Junos has no enable mode; calling enable() would error.
+        mock_conn = MagicMock()
+        mock_handler.return_value = mock_conn
+        junos_config = {"device_type": "juniper_junos", "host": "10.0.0.3"}
+
+        conn = NetmikoConnection("vmx", junos_config, credentials)
+        conn.connect()
+
+        mock_conn.enable.assert_not_called()
         conn.disconnect()
 
     @patch("ncli.device.connection.ConnectHandler")
@@ -322,3 +384,67 @@ class TestNetmikoConnectionSendConfig:
             "show configuration system services | display set | no-more"
         )
         assert result == "set system services ssh"
+
+    @patch("ncli.device.connection.ConnectHandler")
+    def test_get_config_nokia_srl(
+        self, mock_handler: MagicMock, credentials: Credentials
+    ) -> None:
+        mock_conn = MagicMock()
+        mock_conn.send_command.return_value = "system { ... }"
+        mock_handler.return_value = mock_conn
+        srl_cfg = {"device_type": "nokia_srl", "host": "10.0.0.1", "port": 22, "timeout": 30}
+
+        with NetmikoConnection("dev1", srl_cfg, credentials) as conn:
+            result = conn.get_config()
+
+        mock_conn.send_command.assert_called_once_with("info")
+        assert result == "system { ... }"
+
+    @patch("ncli.device.connection.ConnectHandler")
+    def test_get_config_nokia_srl_with_section(
+        self, mock_handler: MagicMock, credentials: Credentials
+    ) -> None:
+        mock_conn = MagicMock()
+        mock_conn.send_command.return_value = "system { hostname srl1 }"
+        mock_handler.return_value = mock_conn
+        srl_cfg = {"device_type": "nokia_srl", "host": "10.0.0.1", "port": 22, "timeout": 30}
+
+        with NetmikoConnection("dev1", srl_cfg, credentials) as conn:
+            result = conn.get_config(section="system")
+
+        mock_conn.send_command.assert_called_once_with("info system")
+        assert result == "system { hostname srl1 }"
+
+    @patch("ncli.device.connection.ConnectHandler")
+    def test_get_config_unknown_vendor_falls_back_with_warning(
+        self,
+        mock_handler: MagicMock,
+        credentials: Credentials,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        mock_conn = MagicMock()
+        mock_conn.send_command.return_value = "running config output"
+        mock_handler.return_value = mock_conn
+        unknown_cfg = {"device_type": "huawei", "host": "10.0.0.1", "port": 22, "timeout": 30}
+
+        connection_module._warned_device_types.discard("huawei")
+        caplog.set_level(logging.WARNING, logger="ncli.device.connection")
+
+        with NetmikoConnection("dev1", unknown_cfg, credentials) as conn:
+            result1 = conn.get_config()
+            result2 = conn.get_config()
+
+        assert result1 == "running config output"
+        assert result2 == "running config output"
+        assert mock_conn.send_command.call_count == 2
+        for call in mock_conn.send_command.call_args_list:
+            assert call.args == ("show running-config",)
+
+        warnings = [
+            r
+            for r in caplog.records
+            if r.levelno == logging.WARNING
+            and r.name == "ncli.device.connection"
+            and "huawei" in r.getMessage()
+        ]
+        assert len(warnings) == 1

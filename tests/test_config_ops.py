@@ -46,13 +46,13 @@ class TestConfigPush:
         assert "committed" in result
 
     def test_push_commits_with_comment(self, mock_connection: MagicMock) -> None:
-        mock_connection.device_config = {"device_type": "arista_eos", "host": "10.0.0.1"}
+        mock_connection.device_config = {"device_type": "cisco_xr", "host": "10.0.0.1"}
         mock_connection.send_config.return_value = "ok"
         mock_inner = MagicMock()
         mock_inner.commit.return_value = "committed"
         mock_connection._ensure_connected.return_value = mock_inner
 
-        lines = ["hostname SW1"]
+        lines = ["hostname R1"]
         config_push(mock_connection, lines, comment="test change")
         mock_inner.commit.assert_called_once_with(comment="test change")
 
@@ -63,6 +63,32 @@ class TestConfigPush:
         lines = ["hostname R1"]
         config_push(mock_connection, lines)
         mock_connection._ensure_connected.assert_not_called()
+
+    def test_push_no_commit_on_arista_eos(self, mock_connection: MagicMock) -> None:
+        # Netmiko's arista driver inherits BaseConnection.commit(), which
+        # raises AttributeError. The default `configure terminal` is immediate,
+        # so no commit step is needed.
+        mock_connection.device_config = {"device_type": "arista_eos", "host": "10.0.0.1"}
+        mock_connection.send_config.return_value = "ok"
+
+        lines = ["hostname SW1"]
+        config_push(mock_connection, lines)
+        mock_connection._ensure_connected.assert_not_called()
+
+    def test_push_commits_on_nokia_srl(self, mock_connection: MagicMock) -> None:
+        # Netmiko's NokiaSrlSSH.send_config_set leaves the session in
+        # `candidate private` and does not auto-commit; without an explicit
+        # commit() call the candidate is discarded on disconnect.
+        mock_connection.device_config = {"device_type": "nokia_srl", "host": "10.0.0.1"}
+        mock_connection.send_config.return_value = "config applied"
+        mock_inner = MagicMock()
+        mock_inner.commit.return_value = "committed"
+        mock_connection._ensure_connected.return_value = mock_inner
+
+        lines = ['set / system banner login-banner "hello"']
+        result = config_push(mock_connection, lines)
+        mock_inner.commit.assert_called_once_with()
+        assert "committed" in result
 
     def test_push_commits_on_juniper_junos(self, mock_connection: MagicMock) -> None:
         mock_connection.device_config = {"device_type": "juniper_junos", "host": "10.0.0.1"}
@@ -139,4 +165,30 @@ class TestConfigDiff:
         mock_connection.get_config.return_value = running
 
         result = config_diff(mock_connection, candidate=running)
+        assert result == ""
+
+    def test_diff_candidate_with_extra_trailing_newline_is_empty(
+        self, mock_connection: MagicMock
+    ) -> None:
+        # Reproduces the scenario where `ncli config show > file` writes
+        # running-config plus an extra trailing newline (added by click.echo),
+        # then the file is fed back via `--candidate`. The candidate file has
+        # one more trailing '\n' than the internal running config.
+        running = "hostname R1\ninterface lo0\n"
+        mock_connection.get_config.return_value = running
+
+        candidate = running + "\n"
+
+        result = config_diff(mock_connection, candidate=candidate)
+        assert result == ""
+
+    def test_diff_candidate_missing_trailing_newline_is_empty(
+        self, mock_connection: MagicMock
+    ) -> None:
+        running = "hostname R1\ninterface lo0\n"
+        mock_connection.get_config.return_value = running
+
+        candidate = running.rstrip("\n")
+
+        result = config_diff(mock_connection, candidate=candidate)
         assert result == ""

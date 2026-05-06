@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from typing import TYPE_CHECKING
 
 from netmiko import ConnectHandler
@@ -24,6 +25,21 @@ _ERROR_PATTERNS = (
 )
 
 _JUNOS_PLATFORMS = frozenset({"junos", "juniper", "juniper_junos"})
+_SRL_PLATFORMS = frozenset({"nokia_srl"})
+# Cisco-style CLIs that respond to `show running-config [| section <name>]`.
+_CISCO_LIKE_PLATFORMS = frozenset(
+    {
+        "cisco_ios",
+        "cisco_xe",
+        "cisco_nxos",
+        "cisco_asa",
+        "cisco_xr",
+        "cisco_iosxr",
+        "arista_eos",
+    }
+)
+
+_warned_device_types: set[str] = set()
 
 
 class NetmikoConnection:
@@ -94,8 +110,33 @@ class NetmikoConnection:
         if "disabled_algorithms" in self.device_config:
             params["disabled_algorithms"] = self.device_config["disabled_algorithms"]
 
+        # cEOS's Netmiko driver matches the post-config-mode prompt with
+        # `read_until_pattern`, whose default 10s budget is too tight on
+        # SSH-forwarded sessions to a busy clab host: `configure terminal`
+        # echoes back, but the new `(config)#` prompt arrives later than 10s
+        # and config_mode() raises ReadTimeout. Bump the per-call read budget.
+        if self.device_config["device_type"] == "arista_eos":
+            params.setdefault("read_timeout_override", 60.0)
+
+        # Optional Netmiko session log path (raw on-the-wire capture). Useful
+        # for diagnosing prompt-detection / read-pattern failures. Set via
+        # device_config["session_log"] or env var NCLI_SESSION_LOG_DIR (a per-
+        # device file `<dir>/<device_name>.log` is written).
+        log_dir = os.environ.get("NCLI_SESSION_LOG_DIR")
+        if "session_log" in self.device_config:
+            params["session_log"] = self.device_config["session_log"]
+        elif log_dir:
+            params["session_log"] = os.path.join(log_dir, f"{self.device_name}.log")
+
         logger.info("Connecting to %s (%s)", self.device_name, params["host"])
         self.net_connect = ConnectHandler(**params)
+        # Cisco-style platforms (incl. cEOS) land in user mode `>` even with
+        # `username admin privilege 15`; without enable(), `show running-config`
+        # returns "% Invalid input (privileged mode required)" and `configure
+        # terminal` is rejected. enable() is a no-op when already in enable
+        # mode, so it's safe to run unconditionally on connect.
+        if self.device_config["device_type"] in _CISCO_LIKE_PLATFORMS:
+            self.net_connect.enable()
         logger.info("Connected to %s", self.device_name)
 
     def disconnect(self) -> None:
@@ -201,7 +242,14 @@ class NetmikoConnection:
         section:
             Optional section filter. Cisco-style: ``"interface"`` becomes
             ``| section interface``. Junos-style: ``"system services"``
-            becomes ``show configuration system services``.
+            becomes ``show configuration system services``. SR Linux:
+            ``"system"`` becomes ``info system``.
+
+        Notes
+        -----
+        Unrecognized ``device_type`` values fall back to
+        ``show running-config`` (with ``| section <name>`` when a section is
+        passed) and emit a one-time warning per process per device_type.
         """
         conn = self._ensure_connected()
 
@@ -212,7 +260,22 @@ class NetmikoConnection:
             if section:
                 base = f"{base} {section}"
             cmd = f"{base} | display set | no-more"
+        elif device_type in _SRL_PLATFORMS:
+            cmd = f"info {section}" if section else "info"
+        elif device_type in _CISCO_LIKE_PLATFORMS:
+            cmd = "show running-config"
+            if section:
+                cmd = f"{cmd} | section {section}"
         else:
+            if device_type not in _warned_device_types:
+                _warned_device_types.add(device_type)
+                logger.warning(
+                    "device_type '%s' is not explicitly supported by "
+                    "get_config; falling back to `show running-config`. "
+                    "Add it to _CISCO_LIKE_PLATFORMS, _JUNOS_PLATFORMS, "
+                    "or _SRL_PLATFORMS to silence this warning.",
+                    device_type,
+                )
             cmd = "show running-config"
             if section:
                 cmd = f"{cmd} | section {section}"
